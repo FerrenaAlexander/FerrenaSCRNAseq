@@ -1,15 +1,13 @@
 Package: FerrenaSCRNAseq
-Title: What the Package Does (One Line, Title Case)
+Title: Package for QC, processing and analysis of scRNAseq data
 Version: 0.0.0.9000
 Authors@R: 
-    person(given = "First",
-           family = "Last",
+    person(given = "Alexander",
+           family = "Ferrena",
            role = c("aut", "cre"),
-           email = "first.last@example.com",
-           comment = c(ORCID = "YOUR-ORCID-ID"))
-Description: What the package does (one paragraph).
-License: `use_mit_license()`, `use_gpl3_license()` or friends to pick a
-    license
+           email = "alexander.ferrena@einsteinmed.org")
+Description: This package is for QC, processing and analysis of scRNAseq data. For QC, it is meant to mitigate human biases by automating the selection of cutoffs for minimum library size and mitochondrial content.
+License: MIT + file LICENSE
 Encoding: UTF-8
 LazyData: true
 Roxygen: list(markdown = TRUE)
