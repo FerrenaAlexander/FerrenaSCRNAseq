@@ -6,7 +6,8 @@
 <!-- badges: start -->
 <!-- badges: end -->
 
-The goal of FerrenaSCRNAseq is to …
+The goal of FerrenaSCRNAseq is to perform QC, processing, and analysis
+of scRNAseq data.
 
 ## Installation
 
