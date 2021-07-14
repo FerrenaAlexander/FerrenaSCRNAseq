@@ -3,13 +3,10 @@
 
 
 
-# Automated filtering for Seurat object ---------------------------
-#'Basic SC Pipeline for QC and clustering
+
+#' Title
 #'
-#' Given a Seurat object, perform QC filtering.
-#' This is best to do on an object that has not undergone other QC/filtering.
-#'
-#' @param seuratobject A Seurat object
+#' @param seuratobject
 #' @param baselinefilter.mad T/F; whether to perform "global" QC, ie without pre-clustering. Default = False.
 #' @param baseline.mito.filter T/F; whether to perform global maximum mitochondrial content filtration using median absolute deviation threshold; will only work if baselinefilter.mad is set to True. Default is True.
 #' @param madmax.dist.percentmito.baseline a numeric, or a string reading 'predict'. If numeric is provided, will use this as median absolute deviation threshold for global mito cutoff. If set to 'predict', will attempt to learn cutoff from data. Default = 'predict'
@@ -19,7 +16,9 @@
 #' @param iterativefilter T/F ; whether to perform iterative filtering on first-pass filtering. Default is True.
 #' @param iterativefilter.libsize either one of two strings ('twosided' or 'lefttail') or False. Twosided will attempt to learn median abs. dev. cutoffs for both min and max to catch debris and, ostensibly, doublets. Lefttail will attempt to learn median abs. dev. threshold for min to catch debris; doublets may not accurately be captured by max cutoffs as this is more an artifact of sequencing than cell suspension. False will skip. Default is 'lefttail'.
 #' @param iterativefilter.mito T/F; whether to learn right-tail median abs. dev. thresholds and filter maximal mitochondrial content from each cluster. May incorrectly remove mito-okay cells while missing true mito-hi cells. Default = F.
-#' @return will return a bunch of plots related to QC and an output in the form of a Seurat object to the standard out.
+#'
+#' @return
+#' @export
 #'
 #' @examples
 automatedfiltering <- function(
@@ -33,8 +32,6 @@ automatedfiltering <- function(
   removemitomaxclust,
   iterativefilter,
   iterativefilter.libsize,
-  iterativefilter.libsize.twosided,
-  iterativefilter.libsize.lefttail,
   iterativefilter.mito){
 
   # baseline (global) filtration
