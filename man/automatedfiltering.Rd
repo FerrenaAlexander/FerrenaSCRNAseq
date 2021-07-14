@@ -14,8 +14,6 @@ automatedfiltering(
   removemitomaxclust,
   iterativefilter,
   iterativefilter.libsize,
-  iterativefilter.libsize.twosided,
-  iterativefilter.libsize.lefttail,
   iterativefilter.mito
 )
 }
@@ -41,9 +39,8 @@ automatedfiltering(
 \item{iterativefilter.mito}{T/F; whether to learn right-tail median abs. dev. thresholds and filter maximal mitochondrial content from each cluster. May incorrectly remove mito-okay cells while missing true mito-hi cells. Default = F.}
 }
 \value{
-will return a bunch of plots related to QC and an output in the form of a Seurat object to the standard out.
+
 }
 \description{
-Given a Seurat object, perform QC filtering.
-This is best to do on an object that has not undergone other QC/filtering.
+Given a Seurat object, perform QC filtering. This is best to do on an object that has not undergone other QC/filtering.
 }

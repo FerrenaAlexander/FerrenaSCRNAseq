@@ -4,9 +4,11 @@
 
 
 
-#' Title
+#' Basic SC Pipeline for QC and clustering
 #'
-#' @param seuratobject
+#' Given a Seurat object, perform QC filtering. This is best to do on an object that has not undergone other QC/filtering.
+#'
+#' @param seuratobject A Seurat object
 #' @param baselinefilter.mad T/F; whether to perform "global" QC, ie without pre-clustering. Default = False.
 #' @param baseline.mito.filter T/F; whether to perform global maximum mitochondrial content filtration using median absolute deviation threshold; will only work if baselinefilter.mad is set to True. Default is True.
 #' @param madmax.dist.percentmito.baseline a numeric, or a string reading 'predict'. If numeric is provided, will use this as median absolute deviation threshold for global mito cutoff. If set to 'predict', will attempt to learn cutoff from data. Default = 'predict'
