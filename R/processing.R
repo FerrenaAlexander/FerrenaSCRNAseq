@@ -1,3 +1,8 @@
+# https://r-pkgs.org/whole-game.html
+
+
+
+
 # Process single dataset ---------------------------
 #'Basic SC Pipeline for QC and clustering
 #'
@@ -1383,350 +1388,29 @@ seuratpipeline <- function(data,
 
 
 
-message('\tnum genes = ', nrow(tmp) , '\n',
-        '\tnum cells = ', ncol(tmp)  , '\n')
-
-
-tmp@commands$ferrenascpipeline <- list()
-
-tmp@commands$ferrenascpipeline[['allcommands']] <-
-  data.frame(Command = c('baselinefilter.mad',
-                         'baseline.mito.filter', 'baseline.libsize.filter',
-
-                         'removemitomaxclust',
-
-                         'iterativefilter',
-                         'iterativefilter.libsize', 'iterativefilter.mito',
-
-                         'cellcycleregression'
-
-  ),
-
-
-
-  Option = c(baselinefilter.mad,
-             baseline.mito.filter, baseline.libsize.filter,
-
-             removemitomaxclust,
-
-             iterativefilter,
-             iterativefilter.libsize, iterativefilter.mito,
-
-             cellcycleregression
-
-  )
-  )
-
-
-
-#mito and ribo content, add to metadata
-#mito
-mito.features <- grep(pattern = "^mt-", x = rownames(x = tmp), value = TRUE, ignore.case = T)
-
-tmp[["percent.mito"]] <- PercentageFeatureSet(tmp, features = mito.features)
-
-#ribo --> remove sincethese are ribo protein genes...
-# ribogenes <- readxl::read_excel('~/Documents/tam/scripts/ribogenes.xlsx')
-# goodribo <- ribogenes$genesymbol[ribogenes$genesymbol %in% rownames(tmp)]
-#
-# tmp[["percent.ribo"]] <- PercentageFeatureSet(tmp, features = goodribo)
-
-
-#checkpoint_prebaseline <- tmp
-
-
-
-#whether to perform baseline filtering at all.
-if(baselinefilter.mad == T) {
-
-  #find mito cutoff high
-  if(baseline.mito.filter == T){
-
-    message('Initiating global baseline mito hi filtration')
-
-    x <- tmp$percent.mito
-    m         <- median(x)
-    abs.dev   <- abs(x - m)
-
-    right.mad <- median(abs.dev[x>=m])
-
-    x.mad <- rep(right.mad, length(x))
-
-    mad.distance <- abs(x - m) / x.mad
-    mad.distance[x==m] <- 0
-
-    #select bad cells (outside of MAD cutoff)
-    if(madmax.dist.percentmito.baseline == 'predict'){
-
-      message('Predicting baseline mito MAD threshold...')
-
-      #predict mad cutoff. for right tail, x > m
-      y=sort(mad.distance[x>m])
-      ecpout <- ecp::e.divisive(diff(as.matrix(y)), k = 2, min.size = 2)
-      #this step is non-trivial... may have to play around with k value and which estimate to use.
-
-
-      ecpp = ecpout$estimates[2]
-      madmax.dist.percentmito.baseline = as.numeric(y[ecpout$estimates[2]])
-      ecpplot <- data.frame(x = 1:length(y), y = y) #should have called this ecpdf...
-
-      ecpplot1 <- ggplot(data=ecpplot, aes(x = x, y = y)) +
-        geom_point(shape=1, size = 0.1) +
-        geom_hline(yintercept = madmax.dist.percentmito.baseline, col = 'red', linetype = 'dashed') +
-        geom_vline(xintercept = ecpp, col = 'red', linetype = 'dashed')+
-        geom_point(mapping = aes(x = ecpp, y = madmax.dist.percentmito.baseline),col = 'red') +
-        theme_linedraw()+
-        xlab(label = 'Cells') + ylab(label = 'Med. Abs. Dev.')
-
-
-      ecpplot2 <- ggplot(data=ecpplot, aes(x = 0, y = y)) +
-        geom_violin(fill = 'steelblue')+
-        geom_jitter(height = 0, width = 0.25, size = 0.1)+
-        geom_hline(yintercept = madmax.dist.percentmito.baseline, col = 'red', linetype = 'dashed')+
-        theme_linedraw()+
-        xlab(label = 'Cells') + ylab(label = 'Med. Abs. Dev.')+
-        scale_x_discrete(limits=0)
-      #scaling x this way so the line is at the same level in the cowplot
-
-      title <- ggdraw() +
-        draw_label(
-          paste0('ECP Prediction = ', ecpp),
-          fontface = 'bold',
-          x = 0,
-          hjust = 0
-        ) +
-        theme(
-          # add margin on the left of the drawing canvas,
-          # so title is aligned with left edge of first plot
-          plot.margin = margin(0, 0, 0, 7)
-        )
-
-      plotrow <- cowplot::plot_grid(ecpplot1, ecpplot2)
-
-      print(
-        plot_grid(
-          title, plotrow,
-          ncol = 1,
-          # rel_heights values control vertical title margins
-          rel_heights = c(0.1, 1)
-        )
-      )
-
-      rm(y, ecpout, ecpplot, ecpplot1, ecpplot2, ecpp, plotrow, title)
-    } #end predict block
-
-    bad <- x[mad.distance > madmax.dist.percentmito.baseline]
-
-    #for plotting / message output: get mito upper bound
-    mitohi <- ifelse( test = length(bad[bad > median(x)]) == 0,
-                      yes = Inf,
-                      no = min(bad[bad > median(x)])
-    )
-
-
-
-    gm <-   ggplot(tmp@meta.data, aes(x = 0, y = percent.mito))+
-      geom_violin(fill='steelblue')+
-      geom_jitter(height = 0, width = 0.25, size = 0.1)+
-      geom_hline(yintercept = mitohi, col = 'red', linetype = 'dashed')+
-      theme_linedraw()+
-      theme(axis.text.x=element_blank(),
-            axis.ticks.x=element_blank())+
-      labs(title = paste0("percent mito cutoff"),
-           subtitle = paste0(length(rownames(tmp@meta.data)), " cells total",
-                             "; cutoff for percent mito is ", as.character(round(mitohi, digits = 3))),
-           caption = paste0('Mito max MAD = ', round(madmax.dist.percentmito.baseline, 3) ,
-                            '\npercent.mito cutoff = ', round(mitohi, digits = 3),
-                            '\nNum cells presubset = ', ncol(tmp),
-                            '\nNum cells remaining = ', length(tmp$percent.mito[tmp@meta.data$percent.mito < mitohi]), '\n'))+
-      xlab('Cells')
-
-
-
-    #save to log and print
-    tmp@commands$ferrenascpipeline[['baseline_mito_filter']] <- gm
-    print(gm)
-
-    filteredcells <- names(x[!names(x) %in% names(bad)] )
-
-
-    message('\nMito max MAD = ', round(madmax.dist.percentmito.baseline, 3) ,
-            '\npercent.mito cutoff = ', round(mitohi, digits = 3),
-            '\nNum cells presubset = ', ncol(tmp),
-            '\nNum cells remaining = ', length(filteredcells), '\n')
-
-
-    tmp <- subset(x = tmp,
-                  cells = filteredcells)
-
-    rm(abs.dev, bad, right.mad, m, x, x.mad, mad.distance,filteredcells,
-       madmax.dist.percentmito.baseline, mitohi)
-
-
-  } #end mito baseline block
-
-
-
-  #find libsize cutoff low.
-  if(baseline.libsize.filter == T){
-
-    message('Initiating global baseline lib size low filtration')
-
-    x <- tmp$nCount_RNA
-    m         <- median(x)
-    abs.dev   <- abs(x - m)
-
-    left.mad <- median(abs.dev[x<=m])
-
-    x.mad <- rep(left.mad, length(x))
-
-    mad.distance <- abs(x - m) / x.mad
-    mad.distance[x==m] <- 0
-
-    #select bad cells (outside of MAD cutoff)
-    if(madmax.dist.nCount_RNA.baseline == 'predict'){
-
-      message('Predicting baseline lib size threshold...')
-
-      #predict mad cutoff. for left tail, x < m...
-      y=sort(mad.distance[x<m])
-      ecpout <- ecp::e.divisive(diff(as.matrix(y)), k = 1, min.size = 2)
-      #this step is non-trivial... may have to play around with k value and which estimate to use.
-
-
-      ecpp = ecpout$estimates[2]
-      madmax.dist.nCount_RNA.baseline = as.numeric(y[ecpout$estimates[2]])
-      ecpplot <- data.frame(x = 1:length(y), y = y) #should have called this ecpdf...
-
-      ecpplot1 <- ggplot(data=ecpplot, aes(x = x, y = y)) +
-        geom_point(shape=1, size = 0.1) +
-        geom_hline(yintercept = madmax.dist.nCount_RNA.baseline, col = 'red', linetype = 'dashed') +
-        geom_vline(xintercept = ecpp, col = 'red', linetype = 'dashed')+
-        geom_point(mapping = aes(x = ecpp, y = madmax.dist.nCount_RNA.baseline),col = 'red') +
-        theme_linedraw()+
-        xlab(label = 'Cells') + ylab(label = 'Med. Abs. Dev.')
-
-
-      ecpplot2 <- ggplot(data=ecpplot, aes(x = 0, y = y)) +
-        geom_violin(fill = 'steelblue')+
-        geom_jitter(height = 0, width = 0.25, size = 0.1)+
-        geom_hline(yintercept = madmax.dist.nCount_RNA.baseline, col = 'red', linetype = 'dashed')+
-        theme_linedraw()+
-        xlab(label = 'Cells') + ylab(label = 'Med. Abs. Dev.')+
-        scale_x_discrete(limits=0)
-      #scaling x this way so the line is at the same level in the cowplot
-
-      title <- ggdraw() +
-        draw_label(
-          paste0('ECP Prediction = ', ecpp),
-          fontface = 'bold',
-          x = 0,
-          hjust = 0
-        ) +
-        theme(
-          # add margin on the left of the drawing canvas,
-          # so title is aligned with left edge of first plot
-          plot.margin = margin(0, 0, 0, 7)
-        )
-
-      plotrow <- cowplot::plot_grid(ecpplot1, ecpplot2)
-
-      print(
-        plot_grid(
-          title, plotrow,
-          ncol = 1,
-          # rel_heights values control vertical title margins
-          rel_heights = c(0.1, 1)
-        )
-      )
-
-      rm(y, ecpout, ecpplot, ecpplot1, ecpplot2, ecpp, plotrow, title)
-    }
-
-    bad <- x[mad.distance > madmax.dist.nCount_RNA.baseline]
-
-
-    ncountslo <- ifelse( test = length(bad[bad < median(x)]) == 0,
-                         yes = 0,
-                         no = max(bad[bad < median(x)])
-    )
-
-    #plot cutoffs for library size / UMIs
-    g_lib_hist <- ggplot(tmp@meta.data) +
-      geom_histogram(aes(nCount_RNA),
-                     color="black", fill = "steelblue",
-                     binwidth = 0.05)+
-      #geom_vline(xintercept = ncountshi, linetype = "dashed", colour = "red")+
-      geom_vline(xintercept = ncountslo, linetype = "dashed", colour = "red")+
-      geom_vline(xintercept = median(tmp@meta.data$nCount_RNA),
-                 linetype = "dotted", colour = "red", size = 1.2)+
-      scale_x_log10()+
-      labs(title = paste0("Library Size per Cell"),
-           x = "Library size (UMI, aka 'nCount'), log10 scale",
-           y = "Number of cells" ,
-           subtitle = paste0(length(rownames(tmp@meta.data)), " cells; median lib size = ",
-                             median(tmp@meta.data$nCount_RNA)),
-           caption = paste0("cells remaining = ",
-                            length(x) - length(bad)
-           )
-      )+
-      theme_linedraw()
-
-    g_lib_vln <- ggplot(tmp@meta.data, aes(x = 0, y = nCount_RNA))+
-      geom_violin(fill='steelblue')+
-      geom_jitter(height = 0, width = 0.25, size = 0.1)+
-      geom_hline(yintercept = ncountslo, col = 'red', linetype = 'dashed')+
-      theme_linedraw()+
-      scale_y_log10()+
-      theme(axis.text.x=element_blank(),
-            axis.ticks.x=element_blank())+
-      labs(title = paste0("LibSize Cutoff"),
-           subtitle = paste0(length(rownames(tmp@meta.data)), " cells total",
-                             "; cutoff for libsize low is ", as.character(round(ncountslo, digits = 3))),
-           caption = paste0('Mito max MAD = ', round(madmax.dist.nCount_RNA.baseline, 3) ,
-                            '\npercent.mito cutoff = ', round(ncountslo, digits = 3),
-                            '\nNum cells presubset = ', ncol(tmp),
-                            '\nNum cells remaining = ', length(tmp$percent.mito[tmp@meta.data$nCount_RNA > ncountslo]), '\n'))+
-      xlab('Cells')
-
-    print(g_lib_hist)
-    print(g_lib_vln)
-
-    tmp@commands$ferrenascpipeline[['baseline_libsize_filer_hist']] <- g_lib_hist
-    tmp@commands$ferrenascpipeline[['baseline_libsize_filer_vln']] <- g_lib_vln
-
-
-
-    filteredcells <- names(x[!names(x) %in% names(bad)] )
-
-
-    message('Libsize global max MAD = ', round(madmax.dist.nCount_RNA.baseline, 3) ,
-            '\nLibSize Low Cutoff = ', ncountslo,
-            '\nNum cells presubset = ', ncol(tmp),
-            '\nNum cells remaining = ', length(filteredcells), '\n')
-
-    #save cutoff params...
-
-
-    tmp <- subset(x = tmp,
-                  cells = filteredcells)
-
-    rm(abs.dev, bad, left.mad, m, x, x.mad, mad.distance, ncountslo, madmax.dist.nCount_RNA.baseline, filteredcells)
-
-
-  }
-
-}
-
-
-
-
-
-
-
-
-
-
+# Automated filtering for Seurat object ---------------------------
+#'Basic SC Pipeline for QC and clustering
+#'
+#' Given a Seurat object, perform QC filtering.
+#' This is best to do on an object that has not undergone other QC/filtering.
+#'
+#' @param seuratobject A Seurat object
+#' @param baselinefilter.mad T/F; whether to perform "global" QC, ie without pre-clustering. Default = False.
+#' @param baseline.mito.filter T/F; whether to perform global maximum mitochondrial content filtration using median absolute deviation threshold; will only work if baselinefilter.mad is set to True. Default is True.
+#' @param madmax.dist.percentmito.baseline a numeric, or a string reading 'predict'. If numeric is provided, will use this as median absolute deviation threshold for global mito cutoff. If set to 'predict', will attempt to learn cutoff from data. Default = 'predict'
+#' @param baseline.libsize.filter T/F; whether to perform global minimal lib size filtration using median absolute deviation threshold; will only work if baselinefilter.mad is set to True. Default is True.
+#' @param madmax.dist.nCount_RNA.baseline a numeric, or a string reading 'predict'. If numeric is provided, will use this as median absolute deviation threshold for global libsize cutoff. If set to 'predict', will attempt to learn cutoff from data. Default = 'predict'
+#' @param removemitomaxclust T/F ; whether to identify and remove abnormally high mitochondrial content clusters after first-pass clustering; if no baseline mito filtration is used, there will almost certainly be a mito-driven cluster. Identification is via Grubbs' test for outliers, based on Lukasz Komsta's implementation in the outliers package. Default is True.
+#' @param iterativefilter T/F ; whether to perform iterative filtering on first-pass filtering. Default is True.
+#' @param iterativefilter.libsize either one of two strings ('twosided' or 'lefttail') or False. Twosided will attempt to learn median abs. dev. cutoffs for both min and max to catch debris and, ostensibly, doublets. Lefttail will attempt to learn median abs. dev. threshold for min to catch debris; doublets may not accurately be captured by max cutoffs as this is more an artifact of sequencing than cell suspension. False will skip. Default is 'lefttail'.
+#' @param iterativefilter.mito T/F; whether to learn right-tail median abs. dev. thresholds and filter maximal mitochondrial content from each cluster. May incorrectly remove mito-okay cells while missing true mito-hi cells. Default = F.
+#' @return will return a bunch of plots related to QC and an output in the form of a Seurat object to the standard out.
+#' @examples
+#' \dontrun{
+#' pdf('qcplots.pdf')
+#' sobj <- seuratpipeline('datafilepath.h5', format=h5)
+#' dev.off()
+#' }
 automatedfiltering <- function(
   seuratobject,
   baselinefilter.mad,
@@ -1757,6 +1441,354 @@ automatedfiltering <- function(
   if( missing( iterativefilter.mito )) {iterativefilter.mito <- F}
 
   if( missing( cellcycleregression )) {cellcycleregression <- F}
+
+
+
+
+
+  message('\tnum genes = ', nrow(tmp) , '\n',
+          '\tnum cells = ', ncol(tmp)  , '\n')
+
+
+  tmp@commands$ferrenascpipeline <- list()
+
+  tmp@commands$ferrenascpipeline[['allcommands']] <-
+    data.frame(Command = c('baselinefilter.mad',
+                           'baseline.mito.filter', 'baseline.libsize.filter',
+
+                           'removemitomaxclust',
+
+                           'iterativefilter',
+                           'iterativefilter.libsize', 'iterativefilter.mito',
+
+                           'cellcycleregression'
+
+    ),
+
+
+
+    Option = c(baselinefilter.mad,
+               baseline.mito.filter, baseline.libsize.filter,
+
+               removemitomaxclust,
+
+               iterativefilter,
+               iterativefilter.libsize, iterativefilter.mito,
+
+               cellcycleregression
+
+    )
+    )
+
+
+
+  #mito and ribo content, add to metadata
+  #mito
+  mito.features <- grep(pattern = "^mt-", x = rownames(x = tmp), value = TRUE, ignore.case = T)
+
+  tmp[["percent.mito"]] <- PercentageFeatureSet(tmp, features = mito.features)
+
+  #ribo --> remove sincethese are ribo protein genes...
+  # ribogenes <- readxl::read_excel('~/Documents/tam/scripts/ribogenes.xlsx')
+  # goodribo <- ribogenes$genesymbol[ribogenes$genesymbol %in% rownames(tmp)]
+  #
+  # tmp[["percent.ribo"]] <- PercentageFeatureSet(tmp, features = goodribo)
+
+
+  #checkpoint_prebaseline <- tmp
+
+
+
+  #whether to perform baseline filtering at all.
+  if(baselinefilter.mad == T) {
+
+    #find mito cutoff high
+    if(baseline.mito.filter == T){
+
+      message('Initiating global baseline mito hi filtration')
+
+      x <- tmp$percent.mito
+      m         <- median(x)
+      abs.dev   <- abs(x - m)
+
+      right.mad <- median(abs.dev[x>=m])
+
+      x.mad <- rep(right.mad, length(x))
+
+      mad.distance <- abs(x - m) / x.mad
+      mad.distance[x==m] <- 0
+
+      #select bad cells (outside of MAD cutoff)
+      if(madmax.dist.percentmito.baseline == 'predict'){
+
+        message('Predicting baseline mito MAD threshold...')
+
+        #predict mad cutoff. for right tail, x > m
+        y=sort(mad.distance[x>m])
+        ecpout <- ecp::e.divisive(diff(as.matrix(y)), k = 2, min.size = 2)
+        #this step is non-trivial... may have to play around with k value and which estimate to use.
+
+
+        ecpp = ecpout$estimates[2]
+        madmax.dist.percentmito.baseline = as.numeric(y[ecpout$estimates[2]])
+        ecpplot <- data.frame(x = 1:length(y), y = y) #should have called this ecpdf...
+
+        ecpplot1 <- ggplot(data=ecpplot, aes(x = x, y = y)) +
+          geom_point(shape=1, size = 0.1) +
+          geom_hline(yintercept = madmax.dist.percentmito.baseline, col = 'red', linetype = 'dashed') +
+          geom_vline(xintercept = ecpp, col = 'red', linetype = 'dashed')+
+          geom_point(mapping = aes(x = ecpp, y = madmax.dist.percentmito.baseline),col = 'red') +
+          theme_linedraw()+
+          xlab(label = 'Cells') + ylab(label = 'Med. Abs. Dev.')
+
+
+        ecpplot2 <- ggplot(data=ecpplot, aes(x = 0, y = y)) +
+          geom_violin(fill = 'steelblue')+
+          geom_jitter(height = 0, width = 0.25, size = 0.1)+
+          geom_hline(yintercept = madmax.dist.percentmito.baseline, col = 'red', linetype = 'dashed')+
+          theme_linedraw()+
+          xlab(label = 'Cells') + ylab(label = 'Med. Abs. Dev.')+
+          scale_x_discrete(limits=0)
+        #scaling x this way so the line is at the same level in the cowplot
+
+        title <- ggdraw() +
+          draw_label(
+            paste0('ECP Prediction = ', ecpp),
+            fontface = 'bold',
+            x = 0,
+            hjust = 0
+          ) +
+          theme(
+            # add margin on the left of the drawing canvas,
+            # so title is aligned with left edge of first plot
+            plot.margin = margin(0, 0, 0, 7)
+          )
+
+        plotrow <- cowplot::plot_grid(ecpplot1, ecpplot2)
+
+        print(
+          plot_grid(
+            title, plotrow,
+            ncol = 1,
+            # rel_heights values control vertical title margins
+            rel_heights = c(0.1, 1)
+          )
+        )
+
+        rm(y, ecpout, ecpplot, ecpplot1, ecpplot2, ecpp, plotrow, title)
+      } #end predict block
+
+      bad <- x[mad.distance > madmax.dist.percentmito.baseline]
+
+      #for plotting / message output: get mito upper bound
+      mitohi <- ifelse( test = length(bad[bad > median(x)]) == 0,
+                        yes = Inf,
+                        no = min(bad[bad > median(x)])
+      )
+
+
+
+      gm <-   ggplot(tmp@meta.data, aes(x = 0, y = percent.mito))+
+        geom_violin(fill='steelblue')+
+        geom_jitter(height = 0, width = 0.25, size = 0.1)+
+        geom_hline(yintercept = mitohi, col = 'red', linetype = 'dashed')+
+        theme_linedraw()+
+        theme(axis.text.x=element_blank(),
+              axis.ticks.x=element_blank())+
+        labs(title = paste0("percent mito cutoff"),
+             subtitle = paste0(length(rownames(tmp@meta.data)), " cells total",
+                               "; cutoff for percent mito is ", as.character(round(mitohi, digits = 3))),
+             caption = paste0('Mito max MAD = ', round(madmax.dist.percentmito.baseline, 3) ,
+                              '\npercent.mito cutoff = ', round(mitohi, digits = 3),
+                              '\nNum cells presubset = ', ncol(tmp),
+                              '\nNum cells remaining = ', length(tmp$percent.mito[tmp@meta.data$percent.mito < mitohi]), '\n'))+
+        xlab('Cells')
+
+
+
+      #save to log and print
+      tmp@commands$ferrenascpipeline[['baseline_mito_filter']] <- gm
+      print(gm)
+
+      filteredcells <- names(x[!names(x) %in% names(bad)] )
+
+
+      message('\nMito max MAD = ', round(madmax.dist.percentmito.baseline, 3) ,
+              '\npercent.mito cutoff = ', round(mitohi, digits = 3),
+              '\nNum cells presubset = ', ncol(tmp),
+              '\nNum cells remaining = ', length(filteredcells), '\n')
+
+
+      tmp <- subset(x = tmp,
+                    cells = filteredcells)
+
+      rm(abs.dev, bad, right.mad, m, x, x.mad, mad.distance,filteredcells,
+         madmax.dist.percentmito.baseline, mitohi)
+
+
+    } #end mito baseline block
+
+
+
+    #find libsize cutoff low.
+    if(baseline.libsize.filter == T){
+
+      message('Initiating global baseline lib size low filtration')
+
+      x <- tmp$nCount_RNA
+      m         <- median(x)
+      abs.dev   <- abs(x - m)
+
+      left.mad <- median(abs.dev[x<=m])
+
+      x.mad <- rep(left.mad, length(x))
+
+      mad.distance <- abs(x - m) / x.mad
+      mad.distance[x==m] <- 0
+
+      #select bad cells (outside of MAD cutoff)
+      if(madmax.dist.nCount_RNA.baseline == 'predict'){
+
+        message('Predicting baseline lib size threshold...')
+
+        #predict mad cutoff. for left tail, x < m...
+        y=sort(mad.distance[x<m])
+        ecpout <- ecp::e.divisive(diff(as.matrix(y)), k = 1, min.size = 2)
+        #this step is non-trivial... may have to play around with k value and which estimate to use.
+
+
+        ecpp = ecpout$estimates[2]
+        madmax.dist.nCount_RNA.baseline = as.numeric(y[ecpout$estimates[2]])
+        ecpplot <- data.frame(x = 1:length(y), y = y) #should have called this ecpdf...
+
+        ecpplot1 <- ggplot(data=ecpplot, aes(x = x, y = y)) +
+          geom_point(shape=1, size = 0.1) +
+          geom_hline(yintercept = madmax.dist.nCount_RNA.baseline, col = 'red', linetype = 'dashed') +
+          geom_vline(xintercept = ecpp, col = 'red', linetype = 'dashed')+
+          geom_point(mapping = aes(x = ecpp, y = madmax.dist.nCount_RNA.baseline),col = 'red') +
+          theme_linedraw()+
+          xlab(label = 'Cells') + ylab(label = 'Med. Abs. Dev.')
+
+
+        ecpplot2 <- ggplot(data=ecpplot, aes(x = 0, y = y)) +
+          geom_violin(fill = 'steelblue')+
+          geom_jitter(height = 0, width = 0.25, size = 0.1)+
+          geom_hline(yintercept = madmax.dist.nCount_RNA.baseline, col = 'red', linetype = 'dashed')+
+          theme_linedraw()+
+          xlab(label = 'Cells') + ylab(label = 'Med. Abs. Dev.')+
+          scale_x_discrete(limits=0)
+        #scaling x this way so the line is at the same level in the cowplot
+
+        title <- ggdraw() +
+          draw_label(
+            paste0('ECP Prediction = ', ecpp),
+            fontface = 'bold',
+            x = 0,
+            hjust = 0
+          ) +
+          theme(
+            # add margin on the left of the drawing canvas,
+            # so title is aligned with left edge of first plot
+            plot.margin = margin(0, 0, 0, 7)
+          )
+
+        plotrow <- cowplot::plot_grid(ecpplot1, ecpplot2)
+
+        print(
+          plot_grid(
+            title, plotrow,
+            ncol = 1,
+            # rel_heights values control vertical title margins
+            rel_heights = c(0.1, 1)
+          )
+        )
+
+        rm(y, ecpout, ecpplot, ecpplot1, ecpplot2, ecpp, plotrow, title)
+      }
+
+      bad <- x[mad.distance > madmax.dist.nCount_RNA.baseline]
+
+
+      ncountslo <- ifelse( test = length(bad[bad < median(x)]) == 0,
+                           yes = 0,
+                           no = max(bad[bad < median(x)])
+      )
+
+      #plot cutoffs for library size / UMIs
+      g_lib_hist <- ggplot(tmp@meta.data) +
+        geom_histogram(aes(nCount_RNA),
+                       color="black", fill = "steelblue",
+                       binwidth = 0.05)+
+        #geom_vline(xintercept = ncountshi, linetype = "dashed", colour = "red")+
+        geom_vline(xintercept = ncountslo, linetype = "dashed", colour = "red")+
+        geom_vline(xintercept = median(tmp@meta.data$nCount_RNA),
+                   linetype = "dotted", colour = "red", size = 1.2)+
+        scale_x_log10()+
+        labs(title = paste0("Library Size per Cell"),
+             x = "Library size (UMI, aka 'nCount'), log10 scale",
+             y = "Number of cells" ,
+             subtitle = paste0(length(rownames(tmp@meta.data)), " cells; median lib size = ",
+                               median(tmp@meta.data$nCount_RNA)),
+             caption = paste0("cells remaining = ",
+                              length(x) - length(bad)
+             )
+        )+
+        theme_linedraw()
+
+      g_lib_vln <- ggplot(tmp@meta.data, aes(x = 0, y = nCount_RNA))+
+        geom_violin(fill='steelblue')+
+        geom_jitter(height = 0, width = 0.25, size = 0.1)+
+        geom_hline(yintercept = ncountslo, col = 'red', linetype = 'dashed')+
+        theme_linedraw()+
+        scale_y_log10()+
+        theme(axis.text.x=element_blank(),
+              axis.ticks.x=element_blank())+
+        labs(title = paste0("LibSize Cutoff"),
+             subtitle = paste0(length(rownames(tmp@meta.data)), " cells total",
+                               "; cutoff for libsize low is ", as.character(round(ncountslo, digits = 3))),
+             caption = paste0('Mito max MAD = ', round(madmax.dist.nCount_RNA.baseline, 3) ,
+                              '\npercent.mito cutoff = ', round(ncountslo, digits = 3),
+                              '\nNum cells presubset = ', ncol(tmp),
+                              '\nNum cells remaining = ', length(tmp$percent.mito[tmp@meta.data$nCount_RNA > ncountslo]), '\n'))+
+        xlab('Cells')
+
+      print(g_lib_hist)
+      print(g_lib_vln)
+
+      tmp@commands$ferrenascpipeline[['baseline_libsize_filer_hist']] <- g_lib_hist
+      tmp@commands$ferrenascpipeline[['baseline_libsize_filer_vln']] <- g_lib_vln
+
+
+
+      filteredcells <- names(x[!names(x) %in% names(bad)] )
+
+
+      message('Libsize global max MAD = ', round(madmax.dist.nCount_RNA.baseline, 3) ,
+              '\nLibSize Low Cutoff = ', ncountslo,
+              '\nNum cells presubset = ', ncol(tmp),
+              '\nNum cells remaining = ', length(filteredcells), '\n')
+
+      #save cutoff params...
+
+
+      tmp <- subset(x = tmp,
+                    cells = filteredcells)
+
+      rm(abs.dev, bad, left.mad, m, x, x.mad, mad.distance, ncountslo, madmax.dist.nCount_RNA.baseline, filteredcells)
+
+
+    }
+
+  }
+
+
+
+
+
+
+
+
+
 
 
 
