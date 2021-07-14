@@ -47,10 +47,3 @@ will return a bunch of plots related to QC and an output in the form of a Seurat
 Given a Seurat object, perform QC filtering.
 This is best to do on an object that has not undergone other QC/filtering.
 }
-\examples{
-\dontrun{
-pdf('qcplots.pdf')
-sobj <- seuratpipeline('datafilepath.h5', format=h5)
-dev.off()
-}
-}
