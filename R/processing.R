@@ -36,6 +36,10 @@ automatedfiltering <- function(
   iterativefilter.libsize,
   iterativefilter.mito){
 
+#
+  if( missing( seuratobject )) {stop('please input a Seurat object')}
+  if( is(seuratobject) != 'Seurat') {stop('please input a Seurat object')}
+
   # baseline (global) filtration
   if( missing( baselinefilter.mad )) {baselinefilter.mad <- F}
   if( missing( baseline.mito.filter )) {baseline.mito.filter <- T}
@@ -50,7 +54,6 @@ automatedfiltering <- function(
   if( missing( iterativefilter.libsize )) {iterativefilter.libsize <- 'lefttail'}
   if( missing( iterativefilter.mito )) {iterativefilter.mito <- F}
 
-  if( missing( cellcycleregression )) {cellcycleregression <- F}
 
 
 
