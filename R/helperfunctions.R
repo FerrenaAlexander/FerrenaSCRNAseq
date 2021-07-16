@@ -1,12 +1,27 @@
 # https://r-pkgs.org/whole-game.html
 
-doubletfinderwrapper <- function(seuratobject){
+#' DoubletFinder Wrapper
+#'
+#' Models homotypic doublets using the following table:
+#' https://kb.10xgenomics.com/hc/en-us/articles/360001378811-What-is-the-maximum-number-of-cells-that-can-be-profiled-
+#'
+#' @param seuratobject A Seurat object.
+#' @param clusters string, should match a column name of seuratobject metadata with clusters or other cell group annotations. default = 'seurat_clusters'
+#'
+#' @return a data.frame with barcodes and DoubletFinder classifications
+#' @export
+#'
+#' @examples
+doubletfinderwrapper <- function(seuratobject, clusters){
+
+  if( missing( clusters )) {clusters <- "seurat_clusters"}
+  if( !(clusters %in% colnames(seuratobject@meta.data)) ) {stop('No clusters detected in Seurat object')}
 
 
-  message('DF Parameter Sweep Completed')
+  message('Running DoubletFinder paramsweep (may take a while)')
 
   #param sweep
-  sweepres <- DoubletFinder::paramSweep_v3(seu = tmp, PCs = 1:30, sct = T)
+  sweepres <- DoubletFinder::paramSweep_v3(seu = seuratobject, PCs = 1:30, sct = T)
 
   message('DF Parameter Sweep Completed')
 
@@ -29,46 +44,28 @@ doubletfinderwrapper <- function(seuratobject){
   #tamlabscpipeline::dratedf
   #dratedf <- read.delim('/Users/ferrenaa/Documents/tam/scripts/doublets/doubletrate.txt', header = T)
   #
-
-  dratedf[,1] <- as.numeric(sub("%","",dratedf[,1]))/100
-
-  names(dratedf) <- c('MultipletRate', 'CellsLoaded_100%Viability', 'CellsRecovered')
+  #   dratedf[,1] <- as.numeric(sub("%","",dratedf[,1]))/100
+  #
+  #   names(dratedf) <- c('MultipletRate', 'CellsLoaded_100%Viability', 'CellsRecovered')
 
   dbmodel <- lm(MultipletRate ~ CellsRecovered, data = dratedf)
 
-  predicteddoubletrate <- as.numeric((dbmodel$coefficients['CellsRecovered'] * ncol(tmp)) + dbmodel$coefficients[1])
+  predicteddoubletrate <- as.numeric((dbmodel$coefficients['CellsRecovered'] * ncol(seuratobject)) + dbmodel$coefficients[1])
 
-  homotypicprop <- modelHomotypic(tmp$seurat_clusters)
-  nexppoi <- round(predicteddoubletrate * length(rownames(tmp@meta.data)))
+  #choose annotations to model homotypic doublets
+  homotypicprop <- DoubletFinder::modelHomotypic(    as.vector(  seuratobject@meta.data[,clusters] )   )
+
+  nexppoi <- round(predicteddoubletrate * length(rownames(seuratobject@meta.data)))
   nexppoiadj <- round(nexppoi * (1 - homotypicprop))
 
   #classify doublets
   message('Initiating third-pass clustering for doublet estimation:\n')
 
-  tmp <- suppressWarnings(doubletFinder_v3(seu = tmp, PCs = 1:30, pN = 0.25, pK = maxscorepk, nExp = nexppoi, sct = T))
+  seuratobject <- suppressWarnings(DoubletFinder::doubletFinder_v3(seu = seuratobject, PCs = 1:30, pN = 0.25, pK = maxscorepk, nExp = nexppoi, sct = T))
 
-  ddf <- data.frame(cells = rownames(tmp@meta.data),
-                    orig.ident = tmp$orig.ident,
-                    classification = tmp@meta.data[,ncol(tmp@meta.data)])
+  ddf <- data.frame(cells = rownames(seuratobject@meta.data),
+                    DoubletFinderClassification = seuratobject@meta.data[,ncol(seuratobject@meta.data)])
 
-  #print( table(ddf$classification ))
-
-  ddf <- ddf[ddf$classification == 'Singlet',]
-
-  doublets <- table(ddf$classification )['Doublet']
-  singlets <- table(ddf$classification )['Singlet']
-
-
-  dfoutput <- data.frame(cells_pre_df = cells_pre_df,
-                         doublets = doublets,
-                         singlets = singlets,
-                         row.names = NULL)
-
-
-  tmp@commands$tamlabscpipeline[['DoubletFinder_results']] <- dfoutput
-
-  tmp <- tmp[,ddf$cells]
-
-
+  ddf
 
 }
