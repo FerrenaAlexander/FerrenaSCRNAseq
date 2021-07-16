@@ -17,4 +17,8 @@ BugReports: https://github.com/FerrenaAlexander/FerrenaSCRNAseq/issues
 Imports: 
     cowplot,
     ecp,
-    Seurat
+    ggplot2,
+    outliers,
+    patchwork,
+    Seurat,
+    stringr

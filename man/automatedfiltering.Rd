@@ -2,45 +2,63 @@
 % Please edit documentation in R/processing.R
 \name{automatedfiltering}
 \alias{automatedfiltering}
-\title{Basic SC Pipeline for QC and clustering}
+\title{Automated dataset-specific quality control.}
 \usage{
 automatedfiltering(
   seuratobject,
-  baselinefilter.mad,
-  baseline.mito.filter,
-  madmax.dist.percentmito.baseline,
-  baseline.libsize.filter,
-  madmax.dist.nCount_RNA.baseline,
-  removemitomaxclust,
+  mad.score.threshold,
+  baselinefilter,
+  baselinefilter.complexity,
+  baselinefilter.mito,
+  baselinefilter.libsize,
+  clusters,
+  removemitohiclust,
   iterativefilter,
+  iterativefilter.complexity,
   iterativefilter.libsize,
   iterativefilter.mito
 )
 }
 \arguments{
-\item{seuratobject}{A Seurat object}
+\item{seuratobject}{A Seurat object. should have per-cell total UMI and Feature columns in metadata titled "nCount_RNA" and "nFeature_RNA"}
 
-\item{baselinefilter.mad}{T/F; whether to perform "global" QC, ie without pre-clustering. Default = False.}
+\item{mad.score.threshold}{Numeric. Maximum number of deviations from median tolerated before outlier classification. Default = 2.5. lower is more strict, higher is more lenient.}
 
-\item{baseline.mito.filter}{T/F; whether to perform global maximum mitochondrial content filtration using median absolute deviation threshold; will only work if baselinefilter.mad is set to True. Default is True.}
+\item{baselinefilter}{T/F; whether to perform "global" QC, ie without pre-clustering. Default = True.}
 
-\item{madmax.dist.percentmito.baseline}{a numeric, or a string reading 'predict'. If numeric is provided, will use this as median absolute deviation threshold for global mito cutoff. If set to 'predict', will attempt to learn cutoff from data. Default = 'predict'}
+\item{baselinefilter.complexity}{T/F; whether to perform global filtering of cells based on complexity. Uses linear model for each cell: Num Unique Genes ~ Num UMI + percent mito. outliers are called based on Cook's distance < 1/4n. Default = T}
 
-\item{baseline.libsize.filter}{T/F; whether to perform global minimal lib size filtration using median absolute deviation threshold; will only work if baselinefilter.mad is set to True. Default is True.}
+\item{baselinefilter.mito}{T/F; whether to perform global upper mitochondrial content filtration using median absolute deviation threshold; will only work if baselinefilter is set to True. Default = T.}
 
-\item{madmax.dist.nCount_RNA.baseline}{a numeric, or a string reading 'predict'. If numeric is provided, will use this as median absolute deviation threshold for global libsize cutoff. If set to 'predict', will attempt to learn cutoff from data. Default = 'predict'}
+\item{baselinefilter.libsize}{T/F; whether to perform global lower lib size filtration using median absolute deviation threshold; will only work if baselinefilter is set to True. Default = T.}
 
-\item{removemitomaxclust}{T/F ; whether to identify and remove abnormally high mitochondrial content clusters after first-pass clustering; if no baseline mito filtration is used, there will almost certainly be a mito-driven cluster. Identification is via Grubbs' test for outliers, based on Lukasz Komsta's implementation in the outliers package. Default is True.}
+\item{clusters}{string. Name of seuratobject metadata to be used as clusters. Optimally corresponds to cell type. Or, set to "automate" to call clusters using Seurat pipeline (SCT->30PCs->Leiden with res=0.1). Default = 'automate'}
 
-\item{iterativefilter}{T/F ; whether to perform iterative filtering on first-pass filtering. Default is True.}
+\item{removemitohiclust}{T/F ; whether to identify and remove abnormally high mitochondrial content clusters; if no baseline mito filtration is used, there will almost certainly be a mito-driven cluster. Identification is via outliers::grubbs.test(). Default = T.}
 
-\item{iterativefilter.libsize}{either one of two strings ('twosided' or 'lefttail') or False. Twosided will attempt to learn median abs. dev. cutoffs for both min and max to catch debris and, ostensibly, doublets. Lefttail will attempt to learn median abs. dev. threshold for min to catch debris; doublets may not accurately be captured by max cutoffs as this is more an artifact of sequencing than cell suspension. False will skip. Default is 'lefttail'.}
+\item{iterativefilter}{T/F ; whether to perform cluster-specific filtering. Default = T.}
 
-\item{iterativefilter.mito}{T/F; whether to learn right-tail median abs. dev. thresholds and filter maximal mitochondrial content from each cluster. May incorrectly remove mito-okay cells while missing true mito-hi cells. Default = F.}
+\item{iterativefilter.complexity}{T/F; whether to perform cell type-specific filtering of cells based on complexity. Uses linear model for each cell: Num Unique Genes ~ Num UMI + percent mito. outliers are called based on Cook's distance < 1/4n. Default = T}
+
+\item{iterativefilter.libsize}{T/F ; whether to perform cluster-specific filtering of lower library size cutoff. iterativefilter must be true. Default = T.}
+
+\item{iterativefilter.mito}{T/F; whether to perform cluster-specific filtering of upper mito content cutoff. iterativefilter must be true. Default = T.}
 }
 \value{
-
+a list object. The first element has the barcodes and outlier classification (ie whether the cell should be filtered out or not), along with the step of filtering if called as an outlier. other elements include details of the filtering.
 }
 \description{
-Given a Seurat object, perform QC filtering. This is best to do on an object that has not undergone other QC/filtering.
+Given a Seurat object, perform QC filtering.
+}
+\details{
+This function utilizes "complexity filtration" in the form of  multivariable outlier identification based on modelling number of unique genes by total UMIs and percent mitochondrial content. Cooks distance is used to call outliers in this setting.
+Also, this function uses one-sided univariate filtering of library size and percent mitochdonrial content. This makes use of median absolute deviation outlier thresholding, with adjustments for long-tailed distributions.
+An important parameter for univariate median absolute deviaiton cutoff is mad.score.threshold, by default this is set to 2.5; this is how many deviations from the median are tolerated, beyond which cells are classified as outliers.
+
+Additionally, this function will attempt to perform partition (or cluster)-specific outlier filtering. This is done by stratifying the data into detected or provided clusters and then applying multivariable complexity detection or univariate outlier detection.
+The reasoning behind this is that the number of UMIs and Unique Genes may be cell-type specific. Taking this into account during threshold can reduce Type-1 and Type-2 error in outlier calling.
+
+For reference, see:
+univariate outlier calling with Median Absolute Deviation: Leys et al ScienceDirect 2013 (https://www.sciencedirect.com/science/article/abs/pii/S0022103113000668)
+adjustment of median absolute deviation method for long-tailed distributions: Peter Rosenmai 2013 (https://eurekastatistics.com/using-the-median-absolute-deviation-to-find-outliers/)
 }
