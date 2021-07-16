@@ -22,3 +22,5 @@ Imports:
     patchwork,
     Seurat,
     stringr
+Depends: 
+    R (>= 2.10)
