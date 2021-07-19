@@ -150,7 +150,7 @@ automatedfiltering <- function(
       #set up the model
       # log transforms are used to flatten variance, make things more normal-looking, bring to similar scale
       # pseudocounts prevent log(0)
-      m <- stats::lm(data = df, formula = log(nFeature_RNA+1) ~ log(nCount_RNA+1) + log(percent.mito+1) )
+      m <- stats::lm(data = df, formula = log(nFeature_RNA+1) ~ log(nCount_RNA+1))
 
       #calculate cooks distance for each point
       cd <- cooks.distance(m)
@@ -515,7 +515,7 @@ automatedfiltering <- function(
         #set up the model
         # log transforms are used to flatten variance, make things more normal-looking, bring to similar scale
         # pseudocounts prevent log(0)
-        m <- stats::lm(data = df, formula = log(nFeature_RNA+1) ~ log(nCount_RNA+1) + log(percent.mito+1) )
+        m <- stats::lm(data = df, formula = log(nFeature_RNA+1) ~ log(nCount_RNA+1))
 
         #calculate cooks distance for each point
         cd <- cooks.distance(m)
