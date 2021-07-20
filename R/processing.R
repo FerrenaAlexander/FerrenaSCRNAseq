@@ -319,8 +319,7 @@ automatedfiltering <- function(
 
 
       # get variable, in this case mito
-      # log transform to deal with extreme tails
-      x <- log(seuratobject$percent.mito)
+      x <- seuratobject$percent.mito
 
       #instead of using normal mad (ie mad(x)),
       # use an adjustment for long-tailed distributions by Peter Rosenmai
@@ -334,9 +333,6 @@ automatedfiltering <- function(
 
       #get cells above the threshold
       bad <- x[x > baselinefilter.mito.cutoff]
-
-      #to get mito bag from log space, take natural exponent
-      baselinefilter.mito.cutoff <- exp(baselinefilter.mito.cutoff)
 
       #get cells within threshold
       filteredcells <- names(x[!names(x) %in% names(bad)] )
@@ -472,7 +468,7 @@ automatedfiltering <- function(
 
   if(iterativefilter == T) {
 
-    message('\nInitiative cluster-specific filtration')
+    message('\nInitiate cluster-specific filtration')
 
     #set default ident
     seuratobject <- Seurat::SetIdent(seuratobject, value = seuratobject$seurat_clusters)
@@ -681,8 +677,7 @@ automatedfiltering <- function(
 
 
         # get variable, in this case mito
-        # log transform to deal with extreme tails
-        x <- log(seuratobjectclust$percent.mito)
+        x <- seuratobjectclust$percent.mito
 
         #instead of using normal mad (ie mad(x)),
         # use an adjustment for long-tailed distributions by Peter Rosenmai
@@ -696,9 +691,6 @@ automatedfiltering <- function(
 
         #get cells above the threshold
         bad <- x[x > iterativefilter.mito.cutoff]
-
-        #to get mito bag from log space, take natural exponent
-        iterativefilter.mito.cutoff <- exp(iterativefilter.mito.cutoff)
 
         #get cells within threshold
         filteredcells <- names(x[!names(x) %in% names(bad)] )
