@@ -219,6 +219,8 @@ automatedfiltering <- function(
       # https://www.sciencedirect.com/science/article/abs/pii/S0022103113000668
       # https://eurekastatistics.com/using-the-median-absolute-deviation-to-find-outliers/
 
+      #UPDATE 2021.07.20 - WE WILL NOT USE THE LONG-TAILED MAD HACK.
+
 
       # get variable, in this case libsize
       # log transform to deal with extreme tails
@@ -233,8 +235,8 @@ automatedfiltering <- function(
 
       # get lib size cutoffs; use a right/upper tail only
       # right tail of Z-score, solve for which value matches the
-      baselinefilter.libsize.cutoff.lo <- median(x) - (mad.score.threshold  * left.mad )
-      #baselinefilter.libsize.cutoff.hi <- median(x) + (mad.score.threshold  * right.mad )
+      baselinefilter.libsize.cutoff.lo <- median(x) - (mad.score.threshold  * mad(x) )
+      #baselinefilter.libsize.cutoff.hi <- median(x) + (mad.score.threshold  * mad(x) )
       #only do this for lower tail.
 
 
@@ -328,7 +330,7 @@ automatedfiltering <- function(
 
       # get percent mito cutoff; use a right/upper tail only
       # right tail of Z-score, solve for which value matches the
-      baselinefilter.mito.cutoff <- median(x) + (mad.score.threshold  * right.mad )
+      baselinefilter.mito.cutoff <- median(x) + (mad.score.threshold  * mad(x) )
 
 
       #get cells above the threshold
@@ -593,8 +595,8 @@ automatedfiltering <- function(
 
         # get lib size cutoffs; use a right/upper tail only
         # right tail of Z-score, solve for which value matches the
-        iterative.libsize.cutoff.lo <- median(x) - (mad.score.threshold  * left.mad )
-        #iterative.libsize.cutoff.hi <- median(x) + (mad.score.threshold  * right.mad )
+        iterative.libsize.cutoff.lo <- median(x) - (mad.score.threshold  * mad(x) )
+        #iterative.libsize.cutoff.hi <- median(x) + (mad.score.threshold  * mad(x) )
         #only do this for lower tail.
 
 
@@ -686,7 +688,7 @@ automatedfiltering <- function(
 
         # get percent mito cutoff; use a right/upper tail only
         # right tail of Z-score, solve for which value matches the
-        iterativefilter.mito.cutoff <- median(x) + (mad.score.threshold  * right.mad )
+        iterativefilter.mito.cutoff <- median(x) + (mad.score.threshold  * mad(x) )
 
 
         #get cells above the threshold
