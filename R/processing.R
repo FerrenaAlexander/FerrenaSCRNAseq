@@ -178,9 +178,7 @@ automatedfiltering <- function(
 
       complexityplot.outliers.nolog <- ggplot2::ggplot(df, ggplot2::aes(nCount_RNA, nFeature_RNA, col = outlier)) +
         ggplot2::geom_point(alpha = 0.7, size = 0.7)+
-        ggplot2::scale_color_brewer(palette = 'Set1', direction = -1)+
-        ggplot2::labs(caption = paste0('Total Cells: ', ncol(seuratobject),
-                                       '\nNum Outlers: ', length(outs) ) )
+        ggplot2::scale_color_brewer(palette = 'Set1', direction = -1)
 
       #       #testing purposes: maybe use MCD?
       #https://www.sciencedirect.com/science/article/abs/pii/S0022103117302123
@@ -263,15 +261,12 @@ automatedfiltering <- function(
         ggplot2::geom_vline(xintercept = median(seuratobject@meta.data$nCount_RNA),
                             linetype = "dotted", colour = "red", size = 1.2)+
         ggplot2::scale_x_log10()+
-        ggplot2::labs(title = paste0("Library Size per Cell"),
-                      x = "Library size (UMI, aka 'nCount'), log10 scale",
+        ggplot2::labs(x = "nUMI, log10 scale",
                       y = "Number of cells" ,
-                      subtitle = paste0(length(rownames(seuratobject@meta.data)), " cells; median lib size = ",
-                                        median(seuratobject@meta.data$nCount_RNA)),
-                      caption = paste0("cells remaining = ",
-                                       length(x) - length(bad)
-                      )
-        )+
+                      subtitle = paste0("Median lib size = ", median(seuratobject@meta.data$nCount_RNA)),
+                      caption = paste0('nUMI cutoff = ', round(baselinefilter.libsize.cutoff.lo, digits = 3),
+                                       '\nNum cells presubset = ', ncol(seuratobject),
+                                       '\nNum cells remaining = ', length(filteredcells))  )+
         ggplot2::theme_linedraw()
 
       g_lib_vln <- ggplot2::ggplot(seuratobject@meta.data, ggplot2::aes(x = 0, y = nCount_RNA))+
@@ -282,12 +277,9 @@ automatedfiltering <- function(
         ggplot2::scale_y_log10()+
         ggplot2::theme(axis.text.x=ggplot2::element_blank(),
               axis.ticks.x=ggplot2::element_blank())+
-        ggplot2::labs(title = paste0("LibSize Cutoff"),
-                      subtitle = paste0(length(rownames(seuratobject@meta.data)), " cells total",
-                                        "; cutoff for libsize low is ", as.character(round(baselinefilter.libsize.cutoff.lo, digits = 3))),
-                      caption = paste0('Percent.mito cutoff = ', round(baselinefilter.libsize.cutoff.lo, digits = 3),
-                                       '\nNum cells presubset = ', ncol(seuratobject),
-                                       '\nNum cells remaining = ', length(filteredcells)))+
+        ggplot2::labs(title = paste0("nUMI cutoff"),
+                      y = "nUMI, log10 scale",
+                      subtitle = paste0("low UMI cutoff: ", as.character(round(baselinefilter.libsize.cutoff.lo, digits = 3))) )+
         ggplot2::xlab('Cells')
 
 
@@ -350,8 +342,7 @@ automatedfiltering <- function(
         ggplot2::theme(axis.text.x=ggplot2::element_blank(),
               axis.ticks.x=ggplot2::element_blank())+
         ggplot2::labs(title = paste0("percent mito cutoff"),
-                      subtitle = paste0(length(rownames(seuratobject@meta.data)), " cells total",
-                                        "; cutoff for percent mito is ", as.character(round(baselinefilter.mito.cutoff, digits = 2))),
+                      subtitle = paste0("Hi percent.mitop cutoff: ", as.character(round(baselinefilter.mito.cutoff, digits = 2))),
                       caption = paste0('Percent.mito cutoff = ', round(baselinefilter.mito.cutoff, 2) ,
                                        '\nNum cells presubset = ', ncol(seuratobject),
                                        '\nNum cells remaining = ', length(filteredcells)))+
@@ -541,9 +532,7 @@ automatedfiltering <- function(
 
         complexityplot.outliers.nolog <- ggplot2::ggplot(df, ggplot2::aes(nCount_RNA, nFeature_RNA, col = outlier)) +
           ggplot2::geom_point(alpha = 0.7, size = 0.7)+
-          ggplot2::scale_color_brewer(palette = 'Set1', direction = -1)+
-          ggplot2::labs(caption = paste0('Total Cells: ', ncol(seuratobjectclust),
-                                         '\nNum Outlers: ', length(outs) ) )
+          ggplot2::scale_color_brewer(palette = 'Set1', direction = -1)
 
         #       #testing purposes: maybe use MCD?
         #https://www.sciencedirect.com/science/article/abs/pii/S0022103117302123
@@ -623,15 +612,12 @@ automatedfiltering <- function(
           ggplot2::geom_vline(xintercept = median(seuratobjectclust@meta.data$nCount_RNA),
                               linetype = "dotted", colour = "red", size = 1.2)+
           ggplot2::scale_x_log10()+
-          ggplot2::labs(title = paste0("Library Size per Cell"),
-                        x = "Library size (UMI, aka 'nCount'), log10 scale",
+          ggplot2::labs(x = "nUMI, log10 scale",
                         y = "Number of cells" ,
-                        subtitle = paste0(length(rownames(seuratobjectclust@meta.data)), " cells; median lib size = ",
-                                          median(seuratobjectclust@meta.data$nCount_RNA)),
-                        caption = paste0("cells remaining = ",
-                                         length(x) - length(bad)
-                        )
-          )+
+                        subtitle = paste0("Median lib size = ", median(seuratobject@meta.data$nCount_RNA)),
+                        caption = paste0('nUMI cutoff = ', round(baselinefilter.libsize.cutoff.lo, digits = 3),
+                                         '\nNum cells presubset = ', ncol(seuratobject),
+                                         '\nNum cells remaining = ', length(filteredcells))  )+
           ggplot2::theme_linedraw()
 
         g_lib_vln <- ggplot2::ggplot(seuratobjectclust@meta.data, ggplot2::aes(x = 0, y = nCount_RNA))+
@@ -642,12 +628,9 @@ automatedfiltering <- function(
           ggplot2::scale_y_log10()+
           ggplot2::theme(axis.text.x=ggplot2::element_blank(),
                 axis.ticks.x=ggplot2::element_blank())+
-          ggplot2::labs(title = paste0("LibSize Cutoff"),
-                        subtitle = paste0(length(rownames(seuratobjectclust@meta.data)), " cells total",
-                                          "; cutoff for libsize low is ", as.character(round(iterative.libsize.cutoff.lo, digits = 3))),
-                        caption = paste0('Percent.mito cutoff = ', round(iterative.libsize.cutoff.lo, digits = 3),
-                                         '\nNum cells presubset = ', ncol(seuratobjectclust),
-                                         '\nNum cells remaining = ', length(filteredcells)))+
+          ggplot2::labs(title = paste0("nUMI cutoff"),
+                        y = "nUMI, log10 scale",
+                        subtitle = paste0("low UMI cutoff: ", as.character(round(baselinefilter.libsize.cutoff.lo, digits = 3))) )+
           ggplot2::xlab('Cells')
 
 
@@ -707,11 +690,10 @@ automatedfiltering <- function(
           ggplot2::theme(axis.text.x=ggplot2::element_blank(),
                 axis.ticks.x=ggplot2::element_blank())+
           ggplot2::labs(title = paste0("percent mito cutoff"),
-                        subtitle = paste0(length(rownames(seuratobjectclust@meta.data)), " cells total",
-                                          "; cutoff for percent mito is ", as.character(round(iterativefilter.mito.cutoff, digits = 2))),
-                        caption = paste0('Percent.mito cutoff = ', round(iterativefilter.mito.cutoff, 2) ,
-                                         '\nNum cells presubset = ', ncol(seuratobjectclust),
-                                         '\nNum cells remaining = ', length(filteredcells)))+
+                         subtitle = paste0("Hi percent.mitop cutoff: ", as.character(round(baselinefilter.mito.cutoff, digits = 2))),
+                         caption = paste0('Percent.mito cutoff = ', round(baselinefilter.mito.cutoff, 2) ,
+                                          '\nNum cells presubset = ', ncol(seuratobject),
+                                          '\nNum cells remaining = ', length(filteredcells)))+
           ggplot2::xlab('Cells')
 
 
