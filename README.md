@@ -55,15 +55,17 @@ After filtering, you should re-process the data.
   
   sobj <- RunUMAP(sobj, dims = 1:20)
   
-
+ 
  ### run auto filter ###
+ 
  # sobj is a suerat object
  # clusters refers to a column in the seurat@meta.data - here, we use the clsutering computed above.
  # iterative mito filter (cell-wise) is not as good as identifying and removing the mito cluster.
  # see ?FerrenaSCRNAseq::automatedfiltering
+ 
   reportlist <- FerrenaSCRNAseq::automatedfiltering(sobj, clusters = 'SCT_snn_res.0.1',
                                                     iterativefilter.mito = F)
-  
+
   
   
   #add autofilter results to metadata
