@@ -26,18 +26,20 @@ The idea is to automatically filter out poor quality cells, defined as
 cells with high mito content, low UMI, low “complexity” (lower genes
 than expected given nUMI)
 
-I suggest you process with SCT pipeline and run clustering on
-un-filtered data. This allows cell-type specific QC filtering.
-Sometimes, mito conent, number of UMI or number of genes is actually a
-function of cell type. So global cutoffs suffer from lack of both
-specificity and sensitivity, by throwing out cells that are actually
-good, and keeping cells that are actually bad. So adjusting for cell
-type is pretty important.
+*I suggest you pre-process with Seurat’s SingleCellTransform (SCT)
+pipeline and run clustering on un-filtered data.* This allows cell-type
+specific QC filtering. Sometimes, mito conent, number of UMI or number
+of genes is actually a function of cell type. So global cutoffs suffer
+from lack of both specificity and sensitivity, by throwing out cells
+that are actually good, and keeping cells that are actually bad. So
+adjusting for cell type is pretty important.
 
 It works by multivariable linear models which allow for “outlier
 diagnostics”.
 
 After filtering, you should re-process the data.
+
+See `?FerrenaSCRNAseq::automatedfiltering()`
 
     ### read in and pre-process
     #read in object
@@ -114,13 +116,23 @@ After filtering, you should re-process the data.
 
     sobj <- RunUMAP(sobj, dims = 1:20)
 
-## DoubletFinder Wrapper
+## DoubletFinder Wrapper for automated doublet calling
 
-I use DouletFinder a lot, so I added a wrapper of DouletFinder
+I use DoubletFinder a lot, so I added a wrapper of DoubletFinder
+
+-   DoubletFinder paper:
+    <https://www.sciencedirect.com/science/article/pii/S2405471219300730>
+
+-   DoubletFinder github
+    <https://github.com/chris-mcginnis-ucsf/DoubletFinder>
 
 It assumes processing with SCT. It also uses an estimated doublet rate
-from 10X genomics, see ?FerrenaSCRNAseq::dratedf This table is accurate
-as of 2022 Feb 09.
+from 10X genomics,
+
+see `?FerrenaSCRNAseq::dratedf` and
+(<https://kb.10xgenomics.com/hc/en-us/articles/360001378811-What-is-the-maximum-number-of-cells-that-can-be-profiled->)
+
+This table is accurate as of 2022 Feb 09.
 
     #use doublet filtering
     dfdf <- FerrenaSCRNAseq::doubletfinderwrapper(sobj, clusters = 'SCT_snn_res.0.1')
