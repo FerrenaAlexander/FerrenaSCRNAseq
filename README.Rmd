@@ -36,7 +36,7 @@ This package works with Seurat objects.
 
 The idea is to automatically filter out poor quality cells, defined as cells with high mito content, low UMI, low "complexity" (lower genes than expected given nUMI)
 
-I suggest you process with SCT pipeline and run clustering on un-filtered data. This allows cell-type specific QC filtering. Sometimes, mito conent, number of UMI or number of genes is actually a function of cell type. So globbal cutoffs suffer from lack of both specificty and sensitivity, by throwing out cells that are actually good, and keeping cells that are actually bad. So adjusting for cell type is pretty important.
+I suggest you process with SCT pipeline and run clustering on un-filtered data. This allows cell-type specific QC filtering. Sometimes, mito conent, number of UMI or number of genes is actually a function of cell type. So global cutoffs suffer from lack of both specificity and sensitivity, by throwing out cells that are actually good, and keeping cells that are actually bad. So adjusting for cell type is pretty important.
 
 It works by multivariable linear models which allow for "outlier diagnostics".
 
@@ -126,7 +126,7 @@ sobj <- RunUMAP(sobj, dims = 1:20)
 I use DouletFinder a lot, so I added a wrapper of DouletFinder
 
 It assumes processing with SCT.
-It also uses an estimated doublet rate from 10X genomics, see FerrenaSCRNAseq::dratedf
+It also uses an estimated doublet rate from 10X genomics, see ?FerrenaSCRNAseq::dratedf
 This table is accurate as of 2022 Feb 09.
 
 ```

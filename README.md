@@ -29,8 +29,8 @@ than expected given nUMI)
 I suggest you process with SCT pipeline and run clustering on
 un-filtered data. This allows cell-type specific QC filtering.
 Sometimes, mito conent, number of UMI or number of genes is actually a
-function of cell type. So globbal cutoffs suffer from lack of both
-specificty and sensitivity, by throwing out cells that are actually
+function of cell type. So global cutoffs suffer from lack of both
+specificity and sensitivity, by throwing out cells that are actually
 good, and keeping cells that are actually bad. So adjusting for cell
 type is pretty important.
 
@@ -119,7 +119,7 @@ After filtering, you should re-process the data.
 I use DouletFinder a lot, so I added a wrapper of DouletFinder
 
 It assumes processing with SCT. It also uses an estimated doublet rate
-from 10X genomics, see FerrenaSCRNAseq::dratedf This table is accurate
+from 10X genomics, see ?FerrenaSCRNAseq::dratedf This table is accurate
 as of 2022 Feb 09.
 
     #use doublet filtering
