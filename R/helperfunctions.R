@@ -69,3 +69,98 @@ doubletfinderwrapper <- function(seuratobject, clusters){
   ddf
 
 }
+
+
+
+
+
+#' Create an alluvial plot from long categorical data
+#'
+#' Wrapper around ggalluvium package for ggplot based alluvial plot, for quickly making alluvial plot from "long", "raw" categorical data (such as Seurat object meta.data), rather than two-way counts of categories.
+#'
+#'
+#' labelsdf can look like this:
+#'                      From      To
+#' AACCCAAGCATGCGA-1    Malignant  2
+#' AAACCCAAGTAGGTTA-1    Malignant  2
+#' AAACCCACAAAGCACG-1   Neutrophil  0
+#' AAACCCACACACTTAG-1 FILTERED_OUT  3
+#' AAACCCACAGCAGTAG-1    Malignant  2
+#' AAACCCACATACCGTA-1    Malignant  2
+#'
+#'
+#' @param labelsdf data.frame with two columns of raw categorical label: for example, each row is a cell (or other observation), and each column is metadata column 1 and metadata column 2
+#' @param fromlevels character vector. levels of labelsdf[,1] - can be used to set a desired order from first (top) to last (bottom)
+#' @param tolevels character vector. levels of labelsdf[,1] - can be used to set a desired order from first (top) to last (bottom)
+#' @param ggfittext T/F - whether to use ggfittext, to try to squeeze or remove tiny stratum labels
+#'
+#' @return a ggplot object
+#' @export
+#'
+#' @examples
+alluvialplot <- function(labelsdf, fromlevels, tolevels, ggfittext){
+
+  if( missing(fromlevels) ) { fromlevels = levels(labelsdf[,1])}
+  if( missing(tolevels) ) { tolevels = levels(labelsdf[,2])}
+  if( missing(ggfittext) ){ggfittext = F}
+
+  #if levels not set, get them by ordering hi > lo
+  if(is.null(fromlevels)){fromlevels <- names(sort(table(labelsdf[,1]),decreasing = T)) }
+  if(is.null(tolevels)){tolevels <- names(sort(table(labelsdf[,2]),decreasing = T)) }
+
+
+  require(ggalluvial)
+
+  #for ease, we'll set colnames to from and to
+  colnames(labelsdf) <- c('From', 'To')
+
+
+  # turn it into a matrix
+  mat <- table(labelsdf[,1], labelsdf[,2])
+
+
+  #make the table long format
+  longfreqs <- reshape2::melt(mat)
+  colnames(longfreqs) <- c('From', 'To', 'Freq')
+
+
+  #factorize, using input levels or existing levels
+  # inputting levels is mostly about order.
+
+
+  longfreqs[,1] <- factor(longfreqs[,1], levels = fromlevels)
+  longfreqs[,2] <- factor(longfreqs[,2], levels = tolevels)
+
+  #if both are numerics, it seems to cause an issue, so convert to char vector...
+  # if(is.numeric(longfreqs)[1] & is.numeric(longfreqs)[2])
+  # can't reporduce that problem...
+
+
+  if(ggfittext == T){
+
+  require(ggfittext)
+    ggplot(longfreqs, aes(y = Freq, axis1=From, axis2=To))+
+      geom_alluvium(aes(fill=From))+
+      geom_stratum()+
+      #geom_label(stat = "stratum", aes(label = after_stat(stratum)))+
+      ggfittext::geom_fit_text(stat = "stratum",aes(label = after_stat(stratum)), width = 1/4, min.size = 3) +
+      theme_void()
+
+
+  } else{
+
+
+    ggplot(longfreqs, aes(y = Freq, axis1=From, axis2=To))+
+      geom_alluvium(aes(fill=From))+
+      geom_stratum()+
+      geom_label(stat = "stratum", aes(label = after_stat(stratum)))+
+      # ggfittext::geom_fit_text(stat = "stratum",aes(label = after_stat(stratum)), width = 1/4, min.size = 3) +
+      theme_void()
+
+  }
+
+
+}
+
+
+
