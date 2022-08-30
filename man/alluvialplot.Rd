@@ -21,9 +21,9 @@ a ggplot object
 \description{
 Wrapper around ggalluvium package for ggplot based alluvial plot, for quickly making alluvial plot from "long", "raw" categorical data (such as Seurat object meta.data), rather than two-way counts of categories.
 }
-\details{
-labelsdf can look like this:
-From      To
+\examples{
+#' labelsdf can look like this:
+                     From      To
 AACCCAAGCATGCGA-1    Malignant  2
 AAACCCAAGTAGGTTA-1    Malignant  2
 AAACCCACAAAGCACG-1   Neutrophil  0

@@ -79,14 +79,6 @@ doubletfinderwrapper <- function(seuratobject, clusters){
 #' Wrapper around ggalluvium package for ggplot based alluvial plot, for quickly making alluvial plot from "long", "raw" categorical data (such as Seurat object meta.data), rather than two-way counts of categories.
 #'
 #'
-#' labelsdf can look like this:
-#'                      From      To
-#' AACCCAAGCATGCGA-1    Malignant  2
-#' AAACCCAAGTAGGTTA-1    Malignant  2
-#' AAACCCACAAAGCACG-1   Neutrophil  0
-#' AAACCCACACACTTAG-1 FILTERED_OUT  3
-#' AAACCCACAGCAGTAG-1    Malignant  2
-#' AAACCCACATACCGTA-1    Malignant  2
 #'
 #'
 #' @param labelsdf data.frame with two columns of raw categorical label: for example, each row is a cell (or other observation), and each column is metadata column 1 and metadata column 2
@@ -98,6 +90,14 @@ doubletfinderwrapper <- function(seuratobject, clusters){
 #' @export
 #'
 #' @examples
+#' #' labelsdf can look like this:
+#'                      From      To
+#' AACCCAAGCATGCGA-1    Malignant  2
+#' AAACCCAAGTAGGTTA-1    Malignant  2
+#' AAACCCACAAAGCACG-1   Neutrophil  0
+#' AAACCCACACACTTAG-1 FILTERED_OUT  3
+#' AAACCCACAGCAGTAG-1    Malignant  2
+#' AAACCCACATACCGTA-1    Malignant  2
 alluvialplot <- function(labelsdf, fromlevels, tolevels, ggfittext){
 
   if( missing(fromlevels) ) { fromlevels = levels(labelsdf[,1])}
