@@ -82,8 +82,8 @@ doubletfinderwrapper <- function(seuratobject, clusters){
 #'
 #'
 #' @param labelsdf data.frame with two columns of raw categorical label: for example, each row is a cell (or other observation), and each column is metadata column 1 and metadata column 2
-#' @param fromlevels character vector. levels of labelsdf[,1] - can be used to set a desired order from first (top) to last (bottom)
-#' @param tolevels character vector. levels of labelsdf[,1] - can be used to set a desired order from first (top) to last (bottom)
+#' @param fromlevels character vector. levels of labelsdf first column. can be used to set a desired order from first (top) to last (bottom)
+#' @param tolevels character vector. levels of labelsdf second column. can be used to set a desired order from first (top) to last (bottom)
 #' @param ggfittext T/F - whether to use ggfittext, to try to squeeze or remove tiny stratum labels
 #'
 #' @return a ggplot object
