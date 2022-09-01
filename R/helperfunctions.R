@@ -230,7 +230,7 @@ pseudobulk <- function(sobj, rawh5_path, celltype_colname_in_md, assay, slot){
     message('For celltypes, using sobj@meta.data[,"', celltype_colname_in_md, '"]')
 
     #get celltypes by order of number hi-->lo
-    cts <- names( sort(table(md[,celltype_colname_in_md]), decreasing = T) )
+    cts <- names( sort(table(as.vector(md[,celltype_colname_in_md])), decreasing = T) )
 
     #for each cell type, pseudobulk
     dflist <- lapply(cts, function(ct){
