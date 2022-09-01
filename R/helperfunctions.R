@@ -190,6 +190,7 @@ pseudobulk <- function(sobj, rawh5_path, celltype_colname_in_md, assay, slot){
   if(missing(slot)){slot = 'counts'}
 
   require(Seurat)
+  require(Matrix)
 
   #if rawh5_path is given, read in from raw data for all genes
   # if not, just use the seurat object as is
@@ -240,7 +241,7 @@ pseudobulk <- function(sobj, rawh5_path, celltype_colname_in_md, assay, slot){
       #subset mat
       mat_ct <- mat[,match(rownames(md_ct), colnames(mat))]
 
-      df <- data.frame(rowSums(mat_ct))
+      df <- data.frame(Matrix::rowSums(mat_ct))
       colnames(df) <- ct
       df
     })
