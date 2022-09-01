@@ -164,3 +164,101 @@ alluvialplot <- function(labelsdf, fromlevels, tolevels, ggfittext){
 
 
 
+
+
+
+
+
+
+#' Pseudobulk Seurat objects at whole sample or celltype level
+#'
+#' Pseudobulking is performed adding up gene expression values for each cell, for either cell types or whole sample.
+#'
+#' @param sobj - seurat object
+#' @param rawh5_path - optional, a string, the path to a rawH5 file, if provided will use the raw matrix subsetted by cells in sobj; if not will just pseudobulk the seurat object. useful if some filtering was applied to seurat object but you want to pseudobulk the whole matrix without that filtering, but with only using cells in seurat object. Default is not to use this.
+#' @param celltype_colname_in_md - optional, a string, the column name of `sobj@meta.data` to use as "cell types" or any other grouping for pseudobulking at group level. if not provided, pseudobulk the entire matrix. default, not used.
+#' @param assay - optional, a string, the name of the Seurat object assay to pull matrix from if rawh5_path is not provided. Default is "RNA" assay
+#' @param slot - optional, a string, the name of the Seurat object slot within the designated object assay to pull matrix from if rawh5_path is not provided. Default is "counts" slot
+#'
+#' @return a data.frame. if celltype_colname_in_md is provided, each celltype will have a pseudobulked column, if not the data.frame will just be one column for the whole sample matrix.
+#' @export
+#'
+#' @examples
+pseudobulk <- function(sobj, rawh5_path, celltype_colname_in_md, assay, slot){
+
+  if(missing(assay)){assay = 'RNA'}
+  if(missing(slot)){slot = 'counts'}
+
+  require(Seurat)
+
+  #if rawh5_path is given, read in from raw data for all genes
+  # if not, just use the seurat object as is
+
+  #if celltype_colname_in_md is given, pseudobulk at celltype level
+  # if not, pseudobulk whole object
+
+
+  #get matrix and md
+
+  #md from seurat obj
+  md <- sobj@meta.data
+
+  #mat: read in H5, or use
+  if( !missing(rawh5_path) ){
+
+    message('Reading raw matrix from:\n', rawh5_path)
+
+    #read in raw mat
+    mat  <- Read10X_h5(rawh5)
+
+    mat <- mat[,match()]
+
+  }else{
+
+    message('Using matrix from Seurat object:',
+            '\n - Assay = ', assay,
+            '\n - Slot = ', slot)
+
+    mat <- Seurat::GetAssayData(sobj, assay=assay, slot=slot)
+  }
+
+
+  #pseudobulk (at whole or celltype level)
+
+  if( !missing(celltype_colname_in_md) ){
+    message('For celltypes, using sobj@meta.data[,"', celltype_colname_in_md, '"]')
+
+    #get celltypes by order of number hi-->lo
+    cts <- names( sort(table(md[,celltype_colname_in_md]), decreasing = T) )
+
+    #for each cell type, pseudobulk
+    dflist <- lapply(cts, function(ct){
+
+      #subset md
+      md_ct <- md[md[,celltype_colname_in_md]==ct,]
+
+      #subset mat
+      mat_ct <- mat[,match(rownames(md_ct), colnames(mat))]
+
+      df <- data.frame(rowSums(mat_ct))
+      colnames(df) <- ct
+      df
+    })
+
+    df <- dplyr::bind_cols(dflist)
+
+  } else{
+    message('Celltypes not provided, will pseudobulk whole dataset')
+
+
+    df <- data.frame(rowSums(mat))
+    colnames(df) <- sobj@project.name
+
+  }
+
+
+  df
+
+
+}
+

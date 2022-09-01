@@ -3,3 +3,4 @@
 export(alluvialplot)
 export(automatedfiltering)
 export(doubletfinderwrapper)
+export(pseudobulk)
