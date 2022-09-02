@@ -4,19 +4,23 @@
 \alias{pseudobulk}
 \title{Pseudobulk Seurat objects at whole sample or celltype level}
 \usage{
-pseudobulk(sobj, rawh5_path, celltype_colname_in_md, assay, slot)
+pseudobulk(obj, grouping_colname_in_md, metadata, rawh5_path, assay, slot)
 }
 \arguments{
-\item{sobj}{\itemize{
-\item seurat object
+\item{obj}{\itemize{
+\item seurat object, or a matrix
+}}
+
+\item{grouping_colname_in_md}{\itemize{
+\item optional, a string, the column name of \code{sobj@meta.data} (if obj is a seurat object) or metadata (if using matrix and metadata input) to use as "cell types" or any other grouping for pseudobulking at group level. if not provided, pseudobulk the entire matrix. default, not used.
+}}
+
+\item{metadata}{\itemize{
+\item data.frame with cell metadata, similar to \code{seuratobject@meta.data}. pass this only if
 }}
 
 \item{rawh5_path}{\itemize{
 \item optional, a string, the path to a rawH5 file, if provided will use the raw matrix subsetted by cells in sobj; if not will just pseudobulk the seurat object. useful if some filtering was applied to seurat object but you want to pseudobulk the whole matrix without that filtering, but with only using cells in seurat object. Default is not to use this.
-}}
-
-\item{celltype_colname_in_md}{\itemize{
-\item optional, a string, the column name of \code{sobj@meta.data} to use as "cell types" or any other grouping for pseudobulking at group level. if not provided, pseudobulk the entire matrix. default, not used.
 }}
 
 \item{assay}{\itemize{
@@ -28,7 +32,7 @@ pseudobulk(sobj, rawh5_path, celltype_colname_in_md, assay, slot)
 }}
 }
 \value{
-a data.frame. if celltype_colname_in_md is provided, each celltype will have a pseudobulked column, if not the data.frame will just be one column for the whole sample matrix.
+a data.frame. if grouping_colname_in_md is provided, each celltype will have a pseudobulked column, if not the data.frame will just be one column for the whole sample matrix.
 }
 \description{
 Pseudobulking is performed adding up gene expression values for each cell, for either cell types or whole sample.
