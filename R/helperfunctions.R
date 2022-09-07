@@ -272,7 +272,7 @@ pseudobulk <- function(obj, grouping_colname_in_md, metadata, rawh5_path, assay,
     message('Groupings not provided, will pseudobulk whole dataset')
 
 
-    df <- data.frame(rowSums(mat))
+    df <- data.frame(Matrix::rowSums(mat))
     colnames(df) <- NULL
 
   }
