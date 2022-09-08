@@ -82,37 +82,41 @@ doubletfinderwrapper <- function(seuratobject, clusters){
 #'
 #'
 #' @param labelsdf data.frame with two columns of raw categorical label: for example, each row is a cell (or other observation), and each column is metadata column 1 and metadata column 2
-#' @param fromlevels character vector. levels of labelsdf first column. can be used to set a desired order from first (top) to last (bottom)
-#' @param tolevels character vector. levels of labelsdf second column. can be used to set a desired order from first (top) to last (bottom)
 #' @param ggfittext T/F - whether to use ggfittext, to try to squeeze or remove tiny stratum labels
 #'
 #' @return a ggplot object
 #' @export
 #'
 #' @examples
-#' #' labelsdf can look like this:
+#' #' labelsdf can look like this, row.names of cells not needed, just two columns of categorical data as a data.frame:
 #'                      From      To
 #' AACCCAAGCATGCGA-1    Malignant  2
 #' AAACCCAAGTAGGTTA-1    Malignant  2
 #' AAACCCACAAAGCACG-1   Neutrophil  0
-#' AAACCCACACACTTAG-1 FILTERED_OUT  3
 #' AAACCCACAGCAGTAG-1    Malignant  2
 #' AAACCCACATACCGTA-1    Malignant  2
-alluvialplot <- function(labelsdf, fromlevels, tolevels, ggfittext){
+alluvialplot <- function(labelsdf, ggfittext){
 
-  if( missing(fromlevels) ) { fromlevels = levels(labelsdf[,1])}
-  if( missing(tolevels) ) { tolevels = levels(labelsdf[,2])}
+
   if( missing(ggfittext) ){ggfittext = F}
 
   #if levels not set, get them by ordering hi > lo
-  if(is.null(fromlevels)){fromlevels <- names(sort(table(labelsdf[,1]),decreasing = T)) }
-  if(is.null(tolevels)){tolevels <- names(sort(table(labelsdf[,2]),decreasing = T)) }
 
+  labelsdf2 <- lapply(labelsdf, function(i){
+    if( !is.factor(i) ){
+      factor(i, levels = names(sort(table(i),decreasing = T)))
+    } else{
+      i
+    }
+  })
+
+  labelsdf <- data.frame(labelsdf2, row.names = rownames(labelsdf))
 
   require(ggalluvial)
 
   #for ease, we'll set colnames to from and to
-  colnames(labelsdf) <- c('From', 'To')
+  # colnames(labelsdf)[1:2] <- c('From', 'To')
+  # do this with .data trick now to keep colname!
 
 
   # turn it into a matrix
@@ -121,15 +125,15 @@ alluvialplot <- function(labelsdf, fromlevels, tolevels, ggfittext){
 
   #make the table long format
   longfreqs <- reshape2::melt(mat)
-  colnames(longfreqs) <- c('From', 'To', 'Freq')
+  colnames(longfreqs) <- c(colnames(labelsdf)[1:2], 'Freq')
 
 
   #factorize, using input levels or existing levels
   # inputting levels is mostly about order.
 
 
-  longfreqs[,1] <- factor(longfreqs[,1], levels = fromlevels)
-  longfreqs[,2] <- factor(longfreqs[,2], levels = tolevels)
+  longfreqs[,1] <- factor(longfreqs[,1], levels = levels(labelsdf[,1]) )
+  longfreqs[,2] <- factor(longfreqs[,2], levels = levels(labelsdf[,2]))
 
   #if both are numerics, it seems to cause an issue, so convert to char vector...
   # if(is.numeric(longfreqs)[1] & is.numeric(longfreqs)[2])
@@ -139,8 +143,8 @@ alluvialplot <- function(labelsdf, fromlevels, tolevels, ggfittext){
   if(ggfittext == T){
 
     require(ggfittext)
-    ggplot(longfreqs, aes(y = Freq, axis1=From, axis2=To))+
-      geom_alluvium(aes(fill=From))+
+    ap <- ggplot(longfreqs, aes(y = Freq, axis1=.data[[colnames(longfreqs[1])]], axis2= .data[[colnames(longfreqs[2])]] ))+
+      geom_alluvium(aes(fill= .data[[colnames(longfreqs[1])]] )) +
       geom_stratum()+
       #geom_label(stat = "stratum", aes(label = after_stat(stratum)))+
       ggfittext::geom_fit_text(stat = "stratum",aes(label = after_stat(stratum)), width = 1/4, min.size = 3) +
@@ -150,17 +154,21 @@ alluvialplot <- function(labelsdf, fromlevels, tolevels, ggfittext){
   } else{
 
 
-    ggplot(longfreqs, aes(y = Freq, axis1=From, axis2=To))+
-      geom_alluvium(aes(fill=From))+
+    ap <- ggplot(longfreqs, aes(y = Freq, axis1=.data[[colnames(longfreqs[1])]], axis2= .data[[colnames(longfreqs[2])]] ) )+
+      geom_alluvium(aes(fill= .data[[colnames(longfreqs[1])]] )) +
       geom_stratum()+
       geom_label(stat = "stratum", aes(label = after_stat(stratum)))+
       # ggfittext::geom_fit_text(stat = "stratum",aes(label = after_stat(stratum)), width = 1/4, min.size = 3) +
       theme_void()
 
+
   }
 
 
+  ap
+
 }
+
 
 
 
