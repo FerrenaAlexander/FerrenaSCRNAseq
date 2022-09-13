@@ -2,12 +2,12 @@
 % Please edit documentation in R/helperfunctions.R
 \name{calculate_percent.hemoglobin}
 \alias{calculate_percent.hemoglobin}
-\title{Calculate hemoglobin features in seurat object}
+\title{Calculate hemoglobin features in Seurat object}
 \usage{
 calculate_percent.hemoglobin(sobj, hemoglobin.features)
 }
 \arguments{
-\item{sobj}{seurat object}
+\item{sobj}{Seurat object}
 
 \item{hemoglobin.features}{character vector, hemoglobin gene symbols to search in dataset, default will search all mouse and human hemoglobin gene symbols}
 }
@@ -15,7 +15,7 @@ calculate_percent.hemoglobin(sobj, hemoglobin.features)
 data.frame with percent.hemoglobin in all cells
 }
 \description{
-Calculate hemoglobin features in seurat object
+Calculate hemoglobin features in Seurat object
 }
 \examples{
 sobj[['percent.hemoglobin']] <- Seurat::PercentageFeatureSet(sobj, features = hemoglobin.features)

@@ -17,9 +17,7 @@ autofilter(
 )
 }
 \arguments{
-\item{sobj}{\itemize{
-\item seurat object
-}}
+\item{sobj}{seurat object}
 
 \item{min_num_UMI}{numeric, default is 1000, if no filter is desired set to -Inf}
 
@@ -38,7 +36,7 @@ autofilter(
 \item{globalfilter.libsize}{T/F, default T, whether to filter cells with lower than normal UMI content}
 }
 \description{
-Apply simple cutoffs and discover sample-statistic-data-drive thresholds for poor quality cells in scRNAseq.
+Apply simple cutoffs and discover data-driven thresholds for poor quality cells in scRNAseq.
 }
 \details{
 Simple cutoffs include minimum number of UMIs, minimum number of unique genes detected, maximum percent mito, and maximum percent hemoglobin.

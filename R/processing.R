@@ -1,36 +1,14 @@
 # https://r-pkgs.org/whole-game.html
 
 
-# hemoglobin.features <- c('HBA1', 'HBA2', 'HBB', 'HBD', 'HBE1', 'HBG1', 'HBG2', 'HBM', 'HBQ1', 'HBZ',
-#                          'Hba', 'Hba-a1', 'Hba-a2', 'Hba-ps3', 'Hba-ps4', 'Hba-x', 'Hbb', 'Hbb-ar', 'Hbb-b1', 'Hbb-b2', 'Hbb-bh0', 'Hbb-bh1', 'Hbb-bh2', 'Hbb-bh3', 'Hbb-bs', 'Hbb-bt', 'Hbb-y')
-#
-#
-# min_num_UMI <- 1000
-# min_num_Feature <- 200
-# max_perc_mito <- 25
-# max_perc_hemoglobin <- 25
-#
-#
-# mad.score.threshold = 2.5
-# globalfilter.complexity <- T
-# globalfilter.mito <- T
-# globalfilter.libsize <- T
-#
-# rawh5 <- '~/Dropbox/data/bangdata/scrnaseq-TKO-DKOAA-DKO/rawdata/Sample-06_TL494/filtered_feature_bc_matrix.h5'
-# rawh5 <- '~/Dropbox/data/bangdata/scrnaseq-TKO-DKOAA-DKO/rawdata/Sample-04_DJ582M11/filtered_feature_bc_matrix.h5'
-#
-# sobj <- CreateSeuratObject(   Read10X_h5(rawh5), min.cells= 3)
-
-
-
 #' Perform data-driven filtering of scRNAseq data
 #'
-#' Apply simple cutoffs and discover sample-statistic-data-drive thresholds for poor quality cells in scRNAseq.
+#' Apply simple cutoffs and discover data-driven thresholds for poor quality cells in scRNAseq.
 #'
 #' Simple cutoffs include minimum number of UMIs, minimum number of unique genes detected, maximum percent mito, and maximum percent hemoglobin.
 #' More complex cutoffs are learnt for lower than expected complexity (defined for each cell as num unique genes / num UMIs). Additionally, median absolute deviation is used to exclude remaining cells with high mito content or low UMI content.
 #'
-#' @param sobj - seurat object
+#' @param sobj seurat object
 #' @param min_num_UMI numeric, default is 1000, if no filter is desired set to -Inf
 #' @param min_num_Feature numeric, default is 2, if no filter is desired set to -Inf
 #' @param max_perc_mito numeric, default is 25, if no filter is desired set to Inf
@@ -118,13 +96,8 @@ autofilter <- function(
 
   if( !('percent.hemoglobin' %in% colnames(sobj@meta.data)) ){
 
-    message('Calculating percent.hemoglobin')
-    #hemoglobin content, add to metadata
 
-    #hemoglobin features, all mouse and human hemoglobin genes are searched for, or hemoglobins are user-provided
-    hemoglobin.features <- hemoglobin.features[hemoglobin.features %in% rownames(sobj)]
-
-    sobj[["percent.hemoglobin"]] <- Seurat::PercentageFeatureSet(sobj, features = hemoglobin.features)
+    sobj[["percent.hemoglobin"]] <- FerrenaSCRNAseq::calculate_percent.hemoglobin(sobj)
 
   }
 
@@ -239,7 +212,7 @@ autofilter <- function(
     #plot the relationship; we must use log transforms to see things more clearly.
     complexityplot <- ggplot2::ggplot(md, ggplot2::aes(log(nCount_RNA), log(nFeature_RNA), col = complexity)) +
       ggplot2::geom_point(alpha = 0.7, size = 0.7)+
-      labs(caption = 'Complexity = nFeature / nCount')
+      ggplot2::labs(caption = 'Complexity = nFeature / nCount')
 
 
     #plot loess with residuals and lm with cd
@@ -249,14 +222,14 @@ autofilter <- function(
     cp_lm_cd <- ggplot2::ggplot(md, ggplot2::aes(log(nCount_RNA), log(nFeature_RNA), col = CooksDistance_lm)) +
       ggplot2::geom_point(alpha = 0.7, size = 0.7)+
       ggplot2::geom_smooth(method = 'lm')+
-      scale_color_gradient(high = 'red')+
-      labs(caption = paste0('Cutoff = cooks > 4 / N, here = ', round(4/nrow(md), 5) ) )
+      ggplot2::scale_color_gradient(high = 'red')+
+      ggplot2::labs(caption = paste0('Cutoff = cooks > 4 / N, here = ', round(4/nrow(md), 5) ) )
 
     cp_ls_rd <- ggplot2::ggplot(md, ggplot2::aes(log(nCount_RNA), log(nFeature_RNA), col = resid_loess)) +
       ggplot2::geom_point(alpha = 0.7, size = 0.7)+
       ggplot2::geom_smooth(method = 'loess')+
-      scale_color_gradient2(mid = 'grey', low = 'red', high = 'blue')+
-      labs(caption = 'Cutoff = loess residuals < -2' )
+      ggplot2::scale_color_gradient2(mid = 'grey', low = 'red', high = 'blue')+
+      ggplot2::labs(caption = 'Cutoff = loess residuals < -2' )
 
 
     finalplot <- patchwork::wrap_plots(complexityplot,complexityplot.outliers, cp_lm_cd, cp_ls_rd)+
@@ -477,4 +450,30 @@ autofilter <- function(
 
 
 }
+
+
+
+
+
+### testing below
+
+# hemoglobin.features <- c('HBA1', 'HBA2', 'HBB', 'HBD', 'HBE1', 'HBG1', 'HBG2', 'HBM', 'HBQ1', 'HBZ',
+#                          'Hba', 'Hba-a1', 'Hba-a2', 'Hba-ps3', 'Hba-ps4', 'Hba-x', 'Hbb', 'Hbb-ar', 'Hbb-b1', 'Hbb-b2', 'Hbb-bh0', 'Hbb-bh1', 'Hbb-bh2', 'Hbb-bh3', 'Hbb-bs', 'Hbb-bt', 'Hbb-y')
+#
+#
+# min_num_UMI <- 1000
+# min_num_Feature <- 200
+# max_perc_mito <- 25
+# max_perc_hemoglobin <- 25
+#
+#
+# mad.score.threshold = 2.5
+# globalfilter.complexity <- T
+# globalfilter.mito <- T
+# globalfilter.libsize <- T
+#
+# rawh5 <- '~/Dropbox/data/bangdata/scrnaseq-TKO-DKOAA-DKO/rawdata/Sample-06_TL494/filtered_feature_bc_matrix.h5'
+# rawh5 <- '~/Dropbox/data/bangdata/scrnaseq-TKO-DKOAA-DKO/rawdata/Sample-04_DJ582M11/filtered_feature_bc_matrix.h5'
+#
+# sobj <- CreateSeuratObject(   Read10X_h5(rawh5), min.cells= 3)
 
