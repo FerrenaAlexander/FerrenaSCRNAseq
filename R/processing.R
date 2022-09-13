@@ -315,7 +315,7 @@ autofilter <- function(
                     caption = paste0('Num cells presubset = ', ncol(sobj),
                                      '\nNum cells remaining = ', length(filteredcells))  )+
       ggplot2::theme_linedraw()+
-      coord_flip()
+      ggplot2::coord_flip()
 
     g_lib_vln <- ggplot2::ggplot(sobj@meta.data, ggplot2::aes(x = 0, y = nCount_RNA))+
       ggplot2::geom_violin(fill='steelblue')+
@@ -393,7 +393,7 @@ autofilter <- function(
                     caption = paste0('Num cells presubset = ', ncol(sobj),
                                      '\nNum cells remaining = ', length(filteredcells))  )+
       ggplot2::theme_linedraw()+
-      coord_flip()
+      ggplot2::coord_flip()
 
     g_mito_vln <- ggplot2::ggplot(sobj@meta.data, ggplot2::aes(x = 0, y = percent.mito))+
       ggplot2::geom_violin(fill='steelblue')+
@@ -434,8 +434,7 @@ autofilter <- function(
     reportlist[['globalfilter.mito']] <- list(plot = finalplot, table = finaltable)
 
 
-    sobj <- subset(x = sobj,
-                   cells = filteredcells)
+    sobj <- sobj[,filteredcells]
 
 
   } #end mito baseline block
