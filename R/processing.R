@@ -1,726 +1,471 @@
 # https://r-pkgs.org/whole-game.html
 
 
+# hemoglobin.features <- c('HBA1', 'HBA2', 'HBB', 'HBD', 'HBE1', 'HBG1', 'HBG2', 'HBM', 'HBQ1', 'HBZ',
+#                          'Hba', 'Hba-a1', 'Hba-a2', 'Hba-ps3', 'Hba-ps4', 'Hba-x', 'Hbb', 'Hbb-ar', 'Hbb-b1', 'Hbb-b2', 'Hbb-bh0', 'Hbb-bh1', 'Hbb-bh2', 'Hbb-bh3', 'Hbb-bs', 'Hbb-bt', 'Hbb-y')
+#
+#
+# min_num_UMI <- 1000
+# min_num_Feature <- 200
+# max_perc_mito <- 25
+# max_perc_hemoglobin <- 25
+#
+#
+# mad.score.threshold = 2.5
+# globalfilter.complexity <- T
+# globalfilter.mito <- T
+# globalfilter.libsize <- T
+#
+# rawh5 <- '~/Dropbox/data/bangdata/scrnaseq-TKO-DKOAA-DKO/rawdata/Sample-06_TL494/filtered_feature_bc_matrix.h5'
+# rawh5 <- '~/Dropbox/data/bangdata/scrnaseq-TKO-DKOAA-DKO/rawdata/Sample-04_DJ582M11/filtered_feature_bc_matrix.h5'
+#
+# sobj <- CreateSeuratObject(   Read10X_h5(rawh5), min.cells= 3)
 
 
 
-#' Automated dataset-specific quality control.
+#' Perform data-driven filtering of scRNAseq data
 #'
-#' Given a Seurat object, perform QC filtering.
+#' Apply simple cutoffs and discover sample-statistic-data-drive thresholds for poor quality cells in scRNAseq.
 #'
-#' This function utilizes "complexity filtration" in the form of  multivariable outlier identification based on modelling number of unique genes by total UMIs and percent mitochondrial content. Cooks distance is used to call outliers in this setting.
-#' Also, this function uses one-sided univariate filtering of library size and percent mitochdonrial content. This makes use of median absolute deviation outlier thresholding, with adjustments for long-tailed distributions.
-#' An important parameter for univariate median absolute deviaiton cutoff is mad.score.threshold, by default this is set to 2.5; this is how many deviations from the median are tolerated, beyond which cells are classified as outliers.
+#' Simple cutoffs include minimum number of UMIs, minimum number of unique genes detected, maximum percent mito, and maximum percent hemoglobin.
+#' More complex cutoffs are learnt for lower than expected complexity (defined for each cell as num unique genes / num UMIs). Additionally, median absolute deviation is used to exclude remaining cells with high mito content or low UMI content.
 #'
-#' Additionally, this function will attempt to perform partition (or cluster)-specific outlier filtering. This is done by stratifying the data into detected or provided clusters and then applying multivariable complexity detection or univariate outlier detection.
-#' The reasoning behind this is that the number of UMIs and Unique Genes may be cell-type specific. Taking this into account during threshold can reduce Type-1 and Type-2 error in outlier calling.
+#' @param sobj - seurat object
+#' @param min_num_UMI numeric, default is 1000, if no filter is desired set to -Inf
+#' @param min_num_Feature numeric, default is 2, if no filter is desired set to -Inf
+#' @param max_perc_mito numeric, default is 25, if no filter is desired set to Inf
+#' @param max_perc_hemoglobin numeric, default is 25, if no filter is desired set to Inf
+#' @param mad.score.threshold numeric, default is 2.5, threshold for median abs deviation thresholding, ie cutoffs set to `median +/- mad * threshold`
+#' @param globalfilter.complexity T/F, default T, whether to filter cells with lower than expected number of genes given number of UMIs
+#' @param globalfilter.mito T/F, default T, whether to filter cells with higher than normal mito content
+#' @param globalfilter.libsize T/F, default T, whether to filter cells with lower than normal UMI content
 #'
-#' For reference, see:
-#' univariate outlier calling with Median Absolute Deviation: Leys et al ScienceDirect 2013 (https://www.sciencedirect.com/science/article/abs/pii/S0022103113000668)
-#' adjustment of median absolute deviation method for long-tailed distributions: Peter Rosenmai 2013 (https://eurekastatistics.com/using-the-median-absolute-deviation-to-find-outliers/)
-#'
-#' @param seuratobject A Seurat object. should have per-cell total UMI and Feature columns in metadata titled "nCount_RNA" and "nFeature_RNA"
-#' @param mad.score.threshold Numeric. Maximum number of deviations from median tolerated before outlier classification. Default = 2.5. lower is more strict, higher is more lenient.
-#' @param baselinefilter T/F; whether to perform "global" QC, ie without pre-clustering. Default = True.
-#' @param baselinefilter.complexity T/F; whether to perform global filtering of cells based on complexity. Uses linear model for each cell: Num Unique Genes ~ Num UMI + percent mito. outliers are called based on Cook's distance < 1/4n. Default = T
-#' @param baselinefilter.libsize T/F; whether to perform global lower lib size filtration using median absolute deviation threshold; will only work if baselinefilter is set to True. Default = T.
-#' @param baselinefilter.mito T/F; whether to perform global upper mitochondrial content filtration using median absolute deviation threshold; will only work if baselinefilter is set to True. Default = T.
-#' @param clusters string. Name of seuratobject metadata to be used as clusters. Optimally corresponds to cell type. Or, set to "automate" to call clusters using Seurat pipeline (SCT->30PCs->Leiden with res=0.1). Default = 'automate'
-#' @param removemitohiclust T/F ; whether to identify and remove abnormally high mitochondrial content clusters; if no baseline mito filtration is used, there will almost certainly be a mito-driven cluster. Identification is via outliers::grubbs.test(). Default = T.
-#' @param iterativefilter T/F ; whether to perform cluster-specific filtering. Default = T.
-#' @param iterativefilter.complexity T/F; whether to perform cell type-specific filtering of cells based on complexity. Uses linear model for each cell: Num Unique Genes ~ Num UMI + percent mito. outliers are called based on Cook's distance < 1/4n. Default = T
-#' @param iterativefilter.libsize T/F ; whether to perform cluster-specific filtering of lower library size cutoff. iterativefilter must be true. Default = T.
-#' @param iterativefilter.mito T/F; whether to perform cluster-specific filtering of upper mito content cutoff. iterativefilter must be true. Default = T.
-#'
-#' @return a list object. The first element has the barcodes and outlier classification (ie whether the cell should be filtered out or not), along with the step of filtering if called as an outlier. other elements include details of the filtering.
+#' @return
 #' @export
 #'
 #' @examples
-#' \dontrun{
-#' #Run automated filtering
-#' reportlist <- automatedfiltering(seuratobject)
-#'
-#' #Actually filter based on the calls
-#' barcodefilter <- reportlist[[1]]
-#'
-automatedfiltering <- function(
-  seuratobject,
+autofilter <- function(
+    sobj,
 
-  mad.score.threshold,
+    min_num_UMI,
+    min_num_Feature,
+    max_perc_mito,
+    max_perc_hemoglobin,
 
-  baselinefilter,
-  baselinefilter.complexity,
-  baselinefilter.mito,
-  baselinefilter.libsize,
+    mad.score.threshold,
 
-  clusters,
-  removemitohiclust,
-  iterativefilter,
-  iterativefilter.complexity,
-  iterativefilter.libsize,
-  iterativefilter.mito){
+    globalfilter.complexity,
+    globalfilter.mito,
+    globalfilter.libsize
+
+){
 
   #check if seurat object is there
-  if( missing( seuratobject )) {stop('please input a Seurat object')}
-  if( is(seuratobject) != 'Seurat') {stop('please input a Seurat object')}
+  if( missing( sobj )) {stop('please input a Seurat object')}
+
+  #set the basic cutoffs
+  if( missing(min_num_UMI ) ){min_num_UMI <- 1000}
+  if( missing(min_num_Feature ) ){min_num_Feature <- 200}
+  if( missing(max_perc_mito ) ){max_perc_mito <- 25}
+  if( missing(max_perc_hemoglobin ) ){max_perc_hemoglobin <- 25}
+
 
   #set maximum distance of deviations from median tolerated before outlier classification
   if( missing( mad.score.threshold )) {mad.score.threshold <- 2.5}
 
   # baseline (global) filtration
-  if( missing( baselinefilter )) {baselinefilter <- T}
-  if( missing( baselinefilter.complexity )) {baselinefilter.complexity <- T}
-  if( missing( baselinefilter.mito )) {baselinefilter.mito <- T}
-  if( missing( baselinefilter.libsize )) {baselinefilter.libsize <- T}
+  if( missing( globalfilter.complexity )) {globalfilter.complexity <- T}
+  if( missing( globalfilter.mito )) {globalfilter.mito <- T}
+  if( missing( globalfilter.libsize )) {globalfilter.libsize <- T}
 
-  # cluster based filtration
-  if( missing( clusters )) {clusters <- "automate"}
-  if( missing( removemitohiclust )) {removemitohiclust <- T}
-  if( missing( iterativefilter )) {iterativefilter <- T}
-  if( missing( iterativefilter.complexity )) {iterativefilter.complexity <- T}
-  if( missing( iterativefilter.libsize )) {iterativefilter.libsize <- T}
-  if( missing( iterativefilter.mito )) {iterativefilter.mito <- T}
-
-
-
-
-
-
-  message('num genes = ', nrow(seuratobject) , '\n',
-          'num cells = ', ncol(seuratobject)  , '\n')
 
 
   #output list object; add to this as needed for all filtering.
   reportlist <- list()
 
   #start keeping a cell status DF
-  cellstatus <- data.frame(barcodes = colnames(seuratobject), filteredout = 'No', filterreason = 'Unfiltered_NA')
+  cellstatus <- data.frame(barcodes = colnames(sobj), filteredout = 'No', filterreason = 'Unfiltered')
 
   reportlist[['cellstatus']] <- cellstatus
 
 
-  #rport commands used
+
+
+
+  #report commands used
   reportlist[['allcommands']] <- data.frame(
     Command = c("mad.score.threshold",
-                "baselinefilter", "baselinefilter.complexity", "baselinefilter.libsize", "baselinefilter.mito",
-                "clusters", "removemitohiclust",
-                "iterativefilter", "iterativefilter.complexity", "iterativefilter.libsize", "iterativefilter.mito"),
-
-
+                'min_num_UMI', 'min_num_Feature', 'max_perc_mito', 'max_perc_hemoglobin',
+                "globalfilter.complexity", "globalfilter.libsize", "globalfilter.mito"),
 
     Option = c(mad.score.threshold,
-               baselinefilter, baselinefilter.complexity, baselinefilter.libsize, baselinefilter.mito,
-               clusters, removemitohiclust,
-               iterativefilter, iterativefilter.complexity, iterativefilter.libsize, iterativefilter.mito)
+               min_num_UMI, min_num_Feature, max_perc_mito, max_perc_hemoglobin,
+               globalfilter.complexity, globalfilter.libsize, globalfilter.mito)
 
   )
 
 
+  if( !('percent.mito' %in% colnames(sobj@meta.data)) ){
 
+    message('Calculating percent.mito')
 
+    #mito content, add to metadata
+    mito.features <- grep(pattern = "^mt-", x = rownames(x = sobj), value = TRUE, ignore.case = T)
+    sobj[["percent.mito"]] <- Seurat::PercentageFeatureSet(sobj, features = mito.features)
 
-  #mito content, add to metadata
-  mito.features <- grep(pattern = "^mt-", x = rownames(x = seuratobject), value = TRUE, ignore.case = T)
-  seuratobject[["percent.mito"]] <- Seurat::PercentageFeatureSet(seuratobject, features = mito.features)
+  }
 
-  #whether to perform baseline filtering at all.
-  if(baselinefilter == T) {
 
-    message('Running baseline filtering:')
+  if( !('percent.hemoglobin' %in% colnames(sobj@meta.data)) ){
 
+    message('Calculating percent.hemoglobin')
+    #hemoglobin content, add to metadata
 
-    if(baselinefilter.complexity == T){
+    #hemoglobin features, all mouse and human hemoglobin genes are searched for, or hemoglobins are user-provided
+    hemoglobin.features <- hemoglobin.features[hemoglobin.features %in% rownames(sobj)]
 
-      message(' - Initiating baseline complexity filtration')
+    sobj[["percent.hemoglobin"]] <- Seurat::PercentageFeatureSet(sobj, features = hemoglobin.features)
 
-      #there is usually a linear relationship between nUMIs and nGenes.
-      # high counts + low genes = weird cells...
-      # these cells may also have high mito.
+  }
 
-      # use a linear model to try to ID outliers with low-complexity
+  #report baseline stuff
+  md <- sobj@meta.data
+  reportlist[['baseline_summary']] <- data.frame(summary_nCount_RNA = as.vector(summary(md$nCount_RNA)),
+                                                 summary_nFeature_RNA = as.vector(summary(md$nFeature_RNA)),
+                                                 summary_perc.mito = as.vector(summary(md$percent.mito)),
+                                                 summary_perc.hemoglobin = as.vector(summary(md$percent.hemoglobin)),
+                                                 row.names = names(summary(md$nCount_RNA)))
 
 
-      #set up df; order by mito, for plotting
-      df <- seuratobject@meta.data[order(seuratobject$percent.mito),]
+  ### apply cutoffs based on min umi, min gene, max mito, max hemoglobin
 
-      #plot the relationship; we must use log transforms to see things more clearly.
-      complexityplot <- ggplot2::ggplot(df, ggplot2::aes(log(nCount_RNA), log(nFeature_RNA), col = percent.mito)) +
-        ggplot2::geom_point(alpha = 0.7, size = 0.7)
+  md <- sobj@meta.data
 
-      #set up the model
-      # log transforms are used to flatten variance, make things more normal-looking, bring to similar scale
-      # pseudocounts prevent log(0)
-      m <- stats::lm(data = df, formula = log(nFeature_RNA+1) ~ log(nCount_RNA+1))
+  bad <- md[md$nCount_RNA < min_num_UMI | md$nFeature_RNA < min_num_Feature | md$percent.mito > max_perc_mito | md$percent.hemoglobin > max_perc_hemoglobin,]
 
-      #calculate cooks distance for each point
-      cd <- cooks.distance(m)
+  cellstatus[cellstatus$barcodes %in% rownames(bad),"filteredout"] <- 'Yes'
+  cellstatus[cellstatus$barcodes %in% rownames(bad),"filterreason"] <- 'BasicFilter'
 
-      #define outiers using cutoff of cooks distance > 4 / n
-      outs <- cd[cd > 4/length(cd)]
-      #plot(cd) ; abline(h=4/length(cd))
 
+  cellstatus$BasicFilter <- 'No'
 
-      #plot outliers
-      df$outlier <- 'nonoutlier'
-      df[rownames(df) %in% names(outs), "outlier"] <- 'outlier'
+  #add reasons for filtering
+  #min UMI:
+  explanation_string <- paste0('_nUMI-below-', min_num_UMI)
+  bad_reason <- rownames( bad[bad$nCount_RNA < min_num_UMI,] )
+  cellstatus[ cellstatus$barcodes %in% bad_reason , 'BasicFilter'] <- paste0(cellstatus[ cellstatus$barcodes %in% bad_reason , 'filterreason'],
+                                                                             explanation_string)
 
-      #plot relationship with outlier calls
-      complexityplot.outliers <- ggplot2::ggplot(df, ggplot2::aes(log(nCount_RNA), log(nFeature_RNA), col = outlier)) +
-        ggplot2::geom_point(alpha = 0.7, size = 0.7)+
-        ggplot2::scale_color_brewer(palette = 'Set1', direction = -1)+
-        ggplot2::labs(caption = paste0('Total Cells: ', ncol(seuratobject),
-                                       '\nNum Outlers: ', length(outs) ) )
+  #min feature:
+  explanation_string <- paste0('_nFeature-below-', min_num_Feature)
+  bad_reason <- rownames( bad[bad$nFeature_RNA < min_num_Feature,] )
+  cellstatus[ cellstatus$barcodes %in% bad_reason , 'BasicFilter'] <- paste0(cellstatus[ cellstatus$barcodes %in% bad_reason , 'filterreason'],
+                                                                             explanation_string)
 
+  #max mito:
+  explanation_string <- paste0('_percent.mito-above', max_perc_mito)
+  bad_reason <- rownames( bad[bad$percent.mito > max_perc_mito,] )
+  cellstatus[ cellstatus$barcodes %in% bad_reason , 'BasicFilter'] <- paste0(cellstatus[ cellstatus$barcodes %in% bad_reason , 'filterreason'],
+                                                                             explanation_string)
 
-      #just to visualize, make the non-log plots
-      complexityplot.nolog <- ggplot2::ggplot(df, ggplot2::aes(nCount_RNA, nFeature_RNA, col = percent.mito)) +
-        ggplot2::geom_point(alpha = 0.7, size = 0.7)
+  #max hemoglobin:
+  explanation_string <- paste0('_percent.hemoglobin-above', max_perc_hemoglobin)
+  bad_reason <- rownames( bad[bad$percent.hemoglobin > max_perc_hemoglobin,] )
+  cellstatus[ cellstatus$barcodes %in% bad_reason , 'BasicFilter'] <- paste0(cellstatus[ cellstatus$barcodes %in% bad_reason , 'filterreason'],
+                                                                             explanation_string)
 
-      complexityplot.outliers.nolog <- ggplot2::ggplot(df, ggplot2::aes(nCount_RNA, nFeature_RNA, col = outlier)) +
-        ggplot2::geom_point(alpha = 0.7, size = 0.7)+
-        ggplot2::scale_color_brewer(palette = 'Set1', direction = -1)
 
-      #       #testing purposes: maybe use MCD?
-      #https://www.sciencedirect.com/science/article/abs/pii/S0022103117302123
-      #       df2 <- df[,2:4]
-      #       df2 <- apply(df2, MARGIN = 2, FUN = function(x){log(x+1)})
-      #       outs <- Routliers::outliers_mcd(df2, alpha = 0.001)
-      #       Routliers::plot_outliers_mcd(df2, res = outs)
 
-      #subset and save
-      bad <- outs
-      filteredcells <- names(cd[!names(cd) %in% names(bad)] )
+  #retain good cells
+  good <- cellstatus[cellstatus$filteredout=='No',"barcodes"]
+  sobj <- sobj[,good]
 
-      seuratobject <- subset(x = seuratobject,
-                             cells = filteredcells)
 
-      #report
-      cellstatus[cellstatus$barcodes %in% names(bad),"filteredout"] <- 'Yes'
-      cellstatus[cellstatus$barcodes %in% names(bad),"filterreason"] <- 'baselinefilter.complexity'
+  if(globalfilter.complexity == T){
 
+    message(' - Initiating baseline complexity filtration')
 
-      reportlist[["baselinefilter.complexity"]] <- patchwork::wrap_plots(complexityplot.nolog,complexityplot.outliers.nolog,
-                                                                         complexityplot,complexityplot.outliers)
+    # complexity = num Genes given num UMIs.
+    # nFeature_RNA / nCount_RNA
 
+    # use a linear model to try to ID outliers with low-complexity
 
 
-    }
+    #set up md
+    md <- sobj@meta.data
 
+    #calculate and order by complexity
+    md$complexity <-   md$nFeature_RNA / md$nCount_RNA
+    md <- md[order(md$complexity),]
 
+    #two-step model:
+    # loess: must have low negative residuals < -1
+    # lm: must have cooks distance > 4 / n
 
-    #find libsize cutoff low.
-    if(baselinefilter.libsize == T){
+    #lm
+    m <- stats::lm(data = md, formula = log(nFeature_RNA) ~ log(nCount_RNA))
 
-      message(' - Initiating global baseline lib size low filtration')
+    #calculate cooks distance for each point
+    cd <- cooks.distance(m)
 
-      #the use of median absolute deviation in outlier detection is inspired by the following:
-      # https://www.sciencedirect.com/science/article/abs/pii/S0022103113000668
-      # https://eurekastatistics.com/using-the-median-absolute-deviation-to-find-outliers/
+    #get scaled residuals for each point
+    resid_lm <- scale( residuals(m))
 
-      #UPDATE 2021.07.20 - WE WILL NOT USE THE LONG-TAILED MAD HACK.
+    # log transforms are used to flatten variance, make things more normal-looking, bring to similar scale
+    m_loess <- stats::loess(data = md, formula = log(nFeature_RNA) ~ log(nCount_RNA))
 
+    #get scaled residuals for each point from LOESS
+    resid_loess <- scale( residuals(m_loess))
 
-      # get variable, in this case libsize
-      # log transform to deal with extreme tails
-      x <- log(seuratobject$nCount_RNA)
+    out_decision <- data.frame(cd_lm = cd,
+                               resid_lm  =resid_lm,
+                               resid_loess = resid_loess)
 
-      #instead of using normal mad (ie mad(x)),
-      # use an adjustment for long-tailed distributions by Peter Rosenmai
-      # this is the median of absolute deviations for points above the data median
-      left.mad  <- median(   abs(x - median(x))[x < median(x)]    )
-      #right.mad <- median(   abs(x - median(x))[x > median(x)]    )
-      #only do this for lower tail.
+    #to be an outlier, must have scaled loess residuals < -1 and lm cooks distance > 4/n
+    outs <- rownames( out_decision[out_decision$cd_lm > (4 / nrow(out_decision)) & out_decision$resid_loess < -2,] )
 
-      # get lib size cutoffs; use a right/upper tail only
-      # right tail of Z-score, solve for which value matches the
-      baselinefilter.libsize.cutoff.lo <- median(x) - (mad.score.threshold  * mad(x) )
-      #baselinefilter.libsize.cutoff.hi <- median(x) + (mad.score.threshold  * mad(x) )
-      #only do this for lower tail.
+    #plot outliers
+    md$outlier <- 'nonoutlier'
+    md[rownames(md) %in% outs, "outlier"] <- 'outlier'
 
 
-      #get cells outside threshold
-      bad <- x[x < baselinefilter.libsize.cutoff.lo]
-      #bad <- x[x < baselinefilter.libsize.cutoff.lo | x > baselinefilter.libsize.cutoff.hi]
+    #plot relationship with outlier calls
+    complexityplot.outliers <- ggplot2::ggplot(md, ggplot2::aes(log(nCount_RNA), log(nFeature_RNA), col = outlier)) +
+      ggplot2::geom_point(alpha = 0.7, size = 0.7)+
+      ggplot2::scale_color_brewer(palette = 'Set1', direction = -1)+
+      ggplot2::labs( caption = 'Outliers = Cooks Distance > (4/n)\n& Loess residual < -2' )
 
-      #exponentiate to get out of log space
-      #baselinefilter.libsize.cutoff.hi <- exp(baselinefilter.libsize.cutoff.hi)
-      baselinefilter.libsize.cutoff.lo <- exp(baselinefilter.libsize.cutoff.lo)
 
+    #plot the relationship; we must use log transforms to see things more clearly.
+    complexityplot <- ggplot2::ggplot(md, ggplot2::aes(log(nCount_RNA), log(nFeature_RNA), col = complexity)) +
+      ggplot2::geom_point(alpha = 0.7, size = 0.7)+
+      labs(caption = 'Complexity = nFeature / nCount')
 
-      #get cells within threshold
-      filteredcells <- names(x[!names(x) %in% names(bad)] )
 
+    #plot loess with residuals and lm with cd
+    md <- cbind(md, out_decision)
+    md$CooksDistance_lm <- md$cd_lm
 
-      #plot cutoffs for library size / UMIs
-      g_lib_hist <- ggplot2::ggplot(seuratobject@meta.data) +
-        ggplot2::geom_histogram(ggplot2::aes(nCount_RNA),
-                                color="black", fill = "steelblue",
-                                binwidth = 0.05)+
-        #ggplot2::geom_vline(xintercept = baselinefilter.libsize.cutoff.hi, linetype = "dashed", colour = "red")+
-        ggplot2::geom_vline(xintercept =  baselinefilter.libsize.cutoff.lo, linetype = "dashed", colour = "red")+
-        ggplot2::geom_vline(xintercept = median(seuratobject@meta.data$nCount_RNA),
-                            linetype = "dotted", colour = "red", size = 1.2)+
-        ggplot2::scale_x_log10()+
-        ggplot2::labs(x = "nUMI, log10 scale",
-                      y = "Number of cells" ,
-                      subtitle = paste0("Median lib size = ", median(seuratobject@meta.data$nCount_RNA)),
-                      caption = paste0('nUMI cutoff = ', round(baselinefilter.libsize.cutoff.lo, digits = 3),
-                                       '\nNum cells presubset = ', ncol(seuratobject),
-                                       '\nNum cells remaining = ', length(filteredcells))  )+
-        ggplot2::theme_linedraw()
+    cp_lm_cd <- ggplot2::ggplot(md, ggplot2::aes(log(nCount_RNA), log(nFeature_RNA), col = CooksDistance_lm)) +
+      ggplot2::geom_point(alpha = 0.7, size = 0.7)+
+      ggplot2::geom_smooth(method = 'lm')+
+      scale_color_gradient(high = 'red')+
+      labs(caption = paste0('Cutoff = cooks > 4 / N, here = ', round(4/nrow(md), 5) ) )
 
-      g_lib_vln <- ggplot2::ggplot(seuratobject@meta.data, ggplot2::aes(x = 0, y = nCount_RNA))+
-        ggplot2::geom_violin(fill='steelblue')+
-        ggplot2::geom_jitter(height = 0, width = 0.25, size = 0.1)+
-        ggplot2::geom_hline(yintercept =  baselinefilter.libsize.cutoff.lo, col = 'red', linetype = 'dashed')+
-        ggplot2::theme_linedraw()+
-        ggplot2::scale_y_log10()+
-        ggplot2::theme(axis.text.x=ggplot2::element_blank(),
-              axis.ticks.x=ggplot2::element_blank())+
-        ggplot2::labs(title = paste0("nUMI cutoff"),
-                      y = "nUMI, log10 scale",
-                      subtitle = paste0("low UMI cutoff: ", as.character(round(baselinefilter.libsize.cutoff.lo, digits = 3))) )+
-        ggplot2::xlab('Cells')
+    cp_ls_rd <- ggplot2::ggplot(md, ggplot2::aes(log(nCount_RNA), log(nFeature_RNA), col = resid_loess)) +
+      ggplot2::geom_point(alpha = 0.7, size = 0.7)+
+      ggplot2::geom_smooth(method = 'loess')+
+      scale_color_gradient2(mid = 'grey', low = 'red', high = 'blue')+
+      labs(caption = 'Cutoff = loess residuals < -2' )
 
 
+    finalplot <- patchwork::wrap_plots(complexityplot,complexityplot.outliers, cp_lm_cd, cp_ls_rd)+
+      patchwork::plot_annotation(title = 'Complexity Filtering',
+                                 subtitle = paste0('Total Cells: ', ncol(sobj),
+                                                   '; Num Outlers: ', length(outs)) )
 
-      #report
-      cellstatus[cellstatus$barcodes %in% names(bad),"filteredout"] <- 'Yes'
-      cellstatus[cellstatus$barcodes %in% names(bad),"filterreason"] <- 'baselinefilter.libsize'
 
+    #subset and save
+    bad <- outs
+    filteredcells <- rownames( md[md$outlier == 'nonoutlier',] )
 
-      reportlist[['baselinefilter.libsize']] <- patchwork::wrap_plots(g_lib_vln, g_lib_hist)
+    sobj <- sobj[,filteredcells]
 
+    #report
+    cellstatus[cellstatus$barcodes %in% bad,"filteredout"] <- 'Yes'
+    cellstatus[cellstatus$barcodes %in% bad,"filterreason"] <- 'globalfilter.complexity'
 
-      seuratobject <- subset(x = seuratobject,
-                             cells = filteredcells)
 
+    reportlist[["globalfilter.complexity"]] <- list(plot = finalplot,
+                                                    table = table(md$outlier) )
 
-    } #close baseline libsize loop
 
 
 
-    #find mito cutoff high
-    if(baselinefilter.mito == T){
 
-      message(' - Initiating global baseline mito hi filtration')
-
-      #the use of median absolute deviation in outlier detection is inspired by the following:
-      # https://www.sciencedirect.com/science/article/abs/pii/S0022103113000668
-
-      #the adjustment for non-symmetric / long-tailed data is inspired by this:
-      # https://eurekastatistics.com/using-the-median-absolute-deviation-to-find-outliers/
-
-
-      # get variable, in this case mito
-      x <- seuratobject$percent.mito
-
-      #instead of using normal mad (ie mad(x)),
-      # use an adjustment for long-tailed distributions by Peter Rosenmai
-      # this is the median of absolute deviations for points above the data median
-      right.mad <- median(   abs(x - median(x))[x > median(x)]    )
-
-      # get percent mito cutoff; use a right/upper tail only
-      # right tail of Z-score, solve for which value matches the
-      baselinefilter.mito.cutoff <- median(x) + (mad.score.threshold  * mad(x) )
-
-
-      #get cells above the threshold
-      bad <- x[x > baselinefilter.mito.cutoff]
-
-      #get cells within threshold
-      filteredcells <- names(x[!names(x) %in% names(bad)] )
-
-
-
-      gm <- ggplot2::ggplot(seuratobject@meta.data, ggplot2::aes(x = 0, y = percent.mito))+
-        ggplot2::geom_violin(fill='steelblue')+
-        ggplot2::geom_jitter(height = 0, width = 0.25, size = 0.1)+
-        ggplot2::geom_hline(yintercept = baselinefilter.mito.cutoff, col = 'red', linetype = 'dashed')+
-        ggplot2::scale_y_continuous(breaks = c(0, 25, 50, 75, 100, round(baselinefilter.mito.cutoff, digits = 2)))+
-        ggplot2::theme_linedraw()+
-        ggplot2::theme(axis.text.x=ggplot2::element_blank(),
-              axis.ticks.x=ggplot2::element_blank())+
-        ggplot2::labs(title = paste0("percent mito cutoff"),
-                      subtitle = paste0("Hi percent.mitop cutoff: ", as.character(round(baselinefilter.mito.cutoff, digits = 2))),
-                      caption = paste0('Percent.mito cutoff = ', round(baselinefilter.mito.cutoff, 2) ,
-                                       '\nNum cells presubset = ', ncol(seuratobject),
-                                       '\nNum cells remaining = ', length(filteredcells)))+
-        ggplot2::xlab('Cells')
-
-
-      #report
-      cellstatus[cellstatus$barcodes %in% names(bad),"filteredout"] <- 'Yes'
-      cellstatus[cellstatus$barcodes %in% names(bad),"filterreason"] <- 'baselinefilter.mito'
-
-      reportlist[['baselinefilter.mito']] <- gm
-
-      seuratobject <- subset(x = seuratobject,
-                             cells = filteredcells)
-
-
-    } #end mito baseline block
-
-
-  } # close baseline filtering loop
-
-
-
-
-
-
-  # for cluster-filtering, either cluster the data or get the inputted clusters
-
-  if(clusters == 'automate'){
-
-    message('\nClusters set to automate. Initiating clustering\n')
-
-    #normalize and cluster, first pass, for lib size filtration
-    suppressWarnings(seuratobject <- Seurat::SCTransform(seuratobject, verbose = T))
-
-    seuratobject <- Seurat::RunPCA(object = seuratobject, verbose = F)
-
-    seuratobject <- Seurat::FindNeighbors(object = seuratobject, dims = 1:30, verbose = F)
-    seuratobject <- Seurat::FindClusters(object = seuratobject, resolution = 0.1, verbose = F, algorithm = 4)
-
-  } else{
-    seuratobject$seurat_clusters <- seuratobject@meta.data[,clusters]
   }
 
 
 
-  ### remove the mito cluster and recluster ###
-  if(removemitohiclust == T){
-    message('\nSearching for Mito High clusters')
+  #find libsize cutoff low.
+  if(globalfilter.libsize == T){
 
-    #get average mito for each cluster
-    md <- seuratobject@meta.data
-    avgs <- aggregate(data = md, cbind(nCount_RNA , nFeature_RNA , percent.mito) ~ seurat_clusters, FUN=mean)
-    rm(md)
-    avgsseuratobject <- avgs
-    gt <- outliers::grubbs.test(avgsseuratobject$percent.mito)
+    message(' - Initiating global baseline lib size low filtration')
 
-    #grubbs test while loop for right-tail outliers, w/ bonferroni correction
-    iter=1
-    while(
-      stringr::str_split(gt$alternative, ' ')[[1]][1] == 'highest' &
-      gt$p.value < (0.05 / nrow(avgsseuratobject))
-    ) {
-      message('\tgrubbs outlier test iteration: ',iter)
 
-      avgsseuratobject <- avgsseuratobject[-which.max(avgsseuratobject$percent.mito),]
+    #the use of median absolute deviation in outlier detection is inspired by the following:
+    # https://www.sciencedirect.com/science/article/abs/pii/S0022103113000668
+    # https://eurekastatistics.com/using-the-median-absolute-deviation-to-find-outliers/
 
-      gt <- outliers::grubbs.test(avgsseuratobject$percent.mito)
+    # don't use long-tailed hack.
 
-      iter=iter+1
-    }
 
-    mitohiclusts <- as.vector(avgs$seurat_clusters[!(avgs$seurat_clusters %in% avgsseuratobject$seurat_clusters)])
+    # get variable, in this case libsize
+    # log transform to deal with extreme tails and negative values
+    x <- log( sobj$nCount_RNA )
 
-    #sometimes no mito clusts are detected, so this if-esle avoids crashes in that case
-    if( length(mitohiclusts) != 0 ) {
 
-      #plot violin of mito clusts
-      vln1 <- Seurat::VlnPlot(seuratobject, c('percent.mito'), pt.size = 0.1)+Seurat::NoLegend()
+    # make a mad cutoff; similar to mean +/- sd*2.5, we use median +/- mad*2.5
+    # get lib size cutoffs; use a lower cutoff only
+    globalfilter.libsize.cutoff.lo <- median(x) - (mad.score.threshold  * mad(x) )
 
-      #get cells, report
-      mitoclustcells <- Seurat::WhichCells(seuratobject, idents = mitohiclusts)
-      bad <- mitoclustcells
-      filteredcells <- filteredcells <- names(x[!names(x) %in% names(bad)] )
+    #try multimode analysis...
+    # mm <- multimode::locmodes(log(sobj$nCount_RNA), 2)
+    #globalfilter.libsize.cutoff.lo <-mm$locations[1] - ( mm$locations[2] - mm$locations[1] )
 
 
-      seuratobject <- seuratobject[,!(colnames(seuratobject) %in% mitoclustcells)]
+    #get cells outside threshold
+    bad <- x[x < globalfilter.libsize.cutoff.lo]
+    #bad <- x[x < globalfilter.libsize.cutoff.lo | x > globalfilter.libsize.cutoff.hi]
 
-      vln2 <- Seurat::VlnPlot(seuratobject, c('percent.mito'), pt.size = 0.1) + ggplot2::labs(caption=paste0('Mito hi clusts: ', mitohiclusts))+Seurat::NoLegend()
+    #exponentiate to get out of log space
+    nonexp <- globalfilter.libsize.cutoff.lo
+    globalfilter.libsize.cutoff.lo <- exp(globalfilter.libsize.cutoff.lo)
 
 
-      #report
-      cellstatus[cellstatus$barcodes %in% names(bad),"filteredout"] <- 'Yes'
-      cellstatus[cellstatus$barcodes %in% names(bad),"filterreason"] <- 'removemitohiclust'
+    #get cells within threshold
+    filteredcells <- names(x[!names(x) %in% names(bad)] )
 
-      reportlist[['removemitohiclust']] <-  patchwork::wrap_plots(vln1,vln2, ncol=1)
 
+    #plot cutoffs for library size / UMIs
+    g_lib_hist <- ggplot2::ggplot(sobj@meta.data) +
+      ggplot2::geom_histogram(ggplot2::aes(nCount_RNA),
+                              color="black", fill = "steelblue",
+                              # binwidth = 0.05
+      )+
+      #ggplot2::geom_vline(xintercept = globalfilter.libsize.cutoff.hi, linetype = "dashed", colour = "red")+
+      ggplot2::geom_vline(xintercept =  globalfilter.libsize.cutoff.lo, linetype = "dashed", colour = "red")+
+      ggplot2::geom_vline(xintercept = median(sobj@meta.data$nCount_RNA),
+                          linetype = "dotted", colour = "red", size = 1.2)+
+      ggplot2::scale_x_log10(labels = scales::comma)+
+      ggplot2::labs(x = "", y = "Number of cells" ,
+                    caption = paste0('Num cells presubset = ', ncol(sobj),
+                                     '\nNum cells remaining = ', length(filteredcells))  )+
+      ggplot2::theme_linedraw()+
+      coord_flip()
 
-      seuratobject <- subset(x = seuratobject,
-                             cells = filteredcells)
+    g_lib_vln <- ggplot2::ggplot(sobj@meta.data, ggplot2::aes(x = 0, y = nCount_RNA))+
+      ggplot2::geom_violin(fill='steelblue')+
+      ggplot2::geom_jitter(height = 0, width = 0.25, size = 0.1)+
+      ggplot2::geom_hline(yintercept =  globalfilter.libsize.cutoff.lo, col = 'red', linetype = 'dashed')+
+      ggplot2::geom_hline(yintercept = median(sobj@meta.data$nCount_RNA),
+                          linetype = "dotted", colour = "red", size = 1.2)+
+      ggplot2::theme_linedraw()+
+      ggplot2::scale_y_log10(labels = scales::comma)+
+      ggplot2::theme(axis.text.x=ggplot2::element_blank(),
+                     axis.ticks.x=ggplot2::element_blank())+
+      ggplot2::labs(y = "nUMI, log10 scale",
+                    caption = paste0("Low UMI cutoff: ", as.character(round(globalfilter.libsize.cutoff.lo, digits = 3)),
+                                     "\nMedian lib size = ", median(sobj@meta.data$nCount_RNA)) )+
+      ggplot2::xlab('Cells')
 
 
 
-    } else{
-      message('No Mito High clusters identified by Grubbs test\n')
+    #report
+    cellstatus[cellstatus$barcodes %in% names(bad),"filteredout"] <- 'Yes'
+    cellstatus[cellstatus$barcodes %in% names(bad),"filterreason"] <- 'globalfilter.libsize'
 
-      reportlist[['removemitohiclust']] <- paste0("No Mito High clusters identified by Grubbs test")
 
-    } #end if-else loop
-  } # end mitohiclust loop
+    #set up reportables
+    finalplot <- patchwork::wrap_plots(g_lib_vln, g_lib_hist)+
+      patchwork::plot_annotation(title = 'Num UMI Filtering',
+                                 subtitle = paste0('Total Cells: ', ncol(sobj),
+                                                   '; Num Outlers: ', length(bad)) )
 
+    finaltable <- data.frame(var = x, var_cond = x < nonexp)
+    finaltable$outlier <- 'nonoutlier'
+    finaltable[finaltable$var_cond==T,'outlier'] <- 'outlier'
+    finaltable <- table(finaltable$outlier)
 
-  ########################### ITERATIVE FILTRATION LOOP ####################################
+    reportlist[['globalfilter.libsize']] <- list(plot = finalplot, table = finaltable)
 
 
+    sobj <- sobj[,filteredcells]
 
-  if(iterativefilter == T) {
+  } #close baseline libsize loop
 
-    message('\nInitiate cluster-specific filtration')
 
-    #set default ident
-    seuratobject <- Seurat::SetIdent(seuratobject, value = seuratobject$seurat_clusters)
 
-    #make list for cluster filtering. will add as one element to reportlist at end.
-    iterativefilterresults <- list()
+  #find mito cutoff high
+  if(globalfilter.mito == T){
 
+    message(' - Initiating global baseline mito hi filtration')
 
-    #loop through clusters and get cells with proper library size, based on MAD
 
-    for(clust in stringr::str_sort(unique(seuratobject$seurat_clusters), numeric = T) ) {        #print(clust) }
 
-      message('Filtering cluster ', clust)
-      seuratobjectclust <- subset(seuratobject, idents = clust)
+    # get variable, in this case mito
+    x <- sobj$percent.mito
 
+    # make a mad cutoff; similar to mean +/- sd*2.5, we use median +/- mad*2.5
+    # get lib size cutoffs; use a high cutoff only
+    globalfilter.mito.cutoff <- median(x) + (mad.score.threshold  * mad(x) )
 
-      if(ncol(seuratobjectclust) < 30) {
-        warning(paste0('Cluster ', clust ,' has under 30 cells; treat results with caution'))
-      }
 
-      #make list for this cluster, will add at end
-      clustlist <- list()
+    #get cells above the threshold
+    bad <- x[x > globalfilter.mito.cutoff]
 
-      ########### ITERATIVE COMPLEXITY FILTER  ###########
-      if(iterativefilter.complexity == T){
-        #there is usually a linear relationship between nUMIs and nGenes.
-        # high counts + low genes = weird cells...
-        # these cells may also have high mito.
+    #get cells within threshold
+    filteredcells <- names(x[!names(x) %in% names(bad)] )
 
-        # use a linear model to try to ID outliers with low-complexity
 
 
-        #set up df; order by mito, for plotting
-        df <- seuratobjectclust@meta.data[order(seuratobjectclust$percent.mito),]
+    g_mito_hist <- ggplot2::ggplot(sobj@meta.data) +
+      ggplot2::geom_histogram(ggplot2::aes(percent.mito),
+                              color="black", fill = "steelblue",
+                              binwidth = 0.5)+
+      ggplot2::geom_vline(xintercept =  globalfilter.mito.cutoff, linetype = "dashed", colour = "red")+
+      ggplot2::geom_vline(xintercept = median(sobj@meta.data$percent.mito),
+                          linetype = "dotted", colour = "red", size = 1.2)+
+      ggplot2::labs(y = "Number of cells" , x = '',
+                    caption = paste0('Num cells presubset = ', ncol(sobj),
+                                     '\nNum cells remaining = ', length(filteredcells))  )+
+      ggplot2::theme_linedraw()+
+      coord_flip()
 
-        #plot the relationship; we must use log transforms to see things more clearly.
-        complexityplot <- ggplot2::ggplot(df, ggplot2::aes(log(nCount_RNA), log(nFeature_RNA), col = percent.mito)) +
-          ggplot2::geom_point(alpha = 0.7, size = 0.7)
+    g_mito_vln <- ggplot2::ggplot(sobj@meta.data, ggplot2::aes(x = 0, y = percent.mito))+
+      ggplot2::geom_violin(fill='steelblue')+
+      ggplot2::geom_jitter(height = 0, width = 0.25, size = 0.1)+
+      ggplot2::geom_hline(yintercept = globalfilter.mito.cutoff, col = 'red', linetype = 'dashed')+
+      ggplot2::geom_hline(yintercept = median(sobj@meta.data$percent.mito),
+                          linetype = "dotted", colour = "red", size = 1.2)+
+      ggplot2::scale_y_continuous(breaks = c(0, 25, 50, 75, 100, round(globalfilter.mito.cutoff, digits = 2)))+
+      ggplot2::theme_linedraw()+
+      ggplot2::theme(axis.text.x=ggplot2::element_blank(),
+                     axis.ticks.x=ggplot2::element_blank())+
+      ggplot2::labs(
+        caption = paste0('Percent.mito cutoff = ', round(globalfilter.mito.cutoff, 2) ,
+                         "\nMedian percent.mito = ", round( median(sobj@meta.data$percent.mito), 2))
+      )+
+      ggplot2::xlab('Cells')
 
-        #set up the model
-        # log transforms are used to flatten variance, make things more normal-looking, bring to similar scale
-        # pseudocounts prevent log(0)
-        m <- stats::lm(data = df, formula = log(nFeature_RNA+1) ~ log(nCount_RNA+1))
 
-        #calculate cooks distance for each point
-        cd <- cooks.distance(m)
 
-        #define outiers using cutoff of cooks distance > 4 / n
-        outs <- cd[cd > 4/length(cd)]
-        #plot(cd) ; abline(h=4/length(cd))
 
+    #report
+    cellstatus[cellstatus$barcodes %in% names(bad),"filteredout"] <- 'Yes'
+    cellstatus[cellstatus$barcodes %in% names(bad),"filterreason"] <- 'globalfilter.mito'
 
-        #plot outliers
-        df$outlier <- 'nonoutlier'
-        df[rownames(df) %in% names(outs), "outlier"] <- 'outlier'
 
-        #plot relationship with outlier calls
-        complexityplot.outliers <- ggplot2::ggplot(df, ggplot2::aes(log(nCount_RNA), log(nFeature_RNA), col = outlier)) +
-          ggplot2::geom_point(alpha = 0.7, size = 0.7)+
-          ggplot2::scale_color_brewer(palette = 'Set1', direction = -1)+
-          ggplot2::labs(caption = paste0('Total Cells: ', ncol(seuratobjectclust),
-                                         '\nNum Outlers: ', length(outs) ) )
 
+    #set up reportables
+    finalplot <- patchwork::wrap_plots(g_mito_vln, g_mito_hist)+
+      patchwork::plot_annotation(title = 'Percent Mito Filtering',
+                                 subtitle = paste0('Total Cells: ', ncol(sobj),
+                                                   '; Num Outlers: ', length(bad)) )
 
-        #just to visualize, make the non-log plots
-        complexityplot.nolog <- ggplot2::ggplot(df, ggplot2::aes(nCount_RNA, nFeature_RNA, col = percent.mito)) +
-          ggplot2::geom_point(alpha = 0.7, size = 0.7)
+    finaltable <- data.frame(var = x, var_cond = x > globalfilter.mito.cutoff)
+    finaltable$outlier <- 'nonoutlier'
+    finaltable[finaltable$var_cond==T,'outlier'] <- 'outlier'
+    finaltable <- table(finaltable$outlier)
 
-        complexityplot.outliers.nolog <- ggplot2::ggplot(df, ggplot2::aes(nCount_RNA, nFeature_RNA, col = outlier)) +
-          ggplot2::geom_point(alpha = 0.7, size = 0.7)+
-          ggplot2::scale_color_brewer(palette = 'Set1', direction = -1)
+    reportlist[['globalfilter.mito']] <- list(plot = finalplot, table = finaltable)
 
-        #       #testing purposes: maybe use MCD?
-        #https://www.sciencedirect.com/science/article/abs/pii/S0022103117302123
-        #       df2 <- df[,2:4]
-        #       df2 <- apply(df2, MARGIN = 2, FUN = function(x){log(x+1)})
-        #       outs <- Routliers::outliers_mcd(df2, alpha = 0.001)
-        #       Routliers::plot_outliers_mcd(df2, res = outs)
 
-        #subset and save
-        bad <- outs
-        filteredcells <- names(cd[!names(cd) %in% names(bad)] )
+    sobj <- subset(x = sobj,
+                   cells = filteredcells)
 
-        seuratobjectclust <- subset(x = seuratobjectclust,
-                                    cells = filteredcells)
 
-        #report
-        cellstatus[cellstatus$barcodes %in% names(bad),"filteredout"] <- 'Yes'
-        cellstatus[cellstatus$barcodes %in% names(bad),"filterreason"] <- 'iterativefilter.complexity'
-
-
-        clustlist[["iterativefilter.complexity"]] <- patchwork::wrap_plots(complexityplot.nolog+ggplot2::ggtitle(paste0('Cluster ', clust)),complexityplot.outliers.nolog,
-                                                                           complexityplot,complexityplot.outliers
-        )
-
-
-
-      }
-
-
-      ########### ITERATIVE LIB SIZE FILTER  ###########
-      if(iterativefilter.libsize == T){
-
-
-        #the use of median absolute deviation in outlier detection is inspired by the following:
-        # https://www.sciencedirect.com/science/article/abs/pii/S0022103113000668
-        # https://eurekastatistics.com/using-the-median-absolute-deviation-to-find-outliers/
-
-
-        # get variable, in this case libsize
-        # log transform to deal with extreme tails
-        x <- log(seuratobjectclust$nCount_RNA)
-
-        #instead of using normal mad (ie mad(x)),
-        # use an adjustment for long-tailed distributions by Peter Rosenmai
-        # this is the median of absolute deviations for points above the data median
-        left.mad  <- median(   abs(x - median(x))[x < median(x)]    )
-        #right.mad <- median(   abs(x - median(x))[x > median(x)]    )
-        #only do this for lower tail.
-
-        # get lib size cutoffs; use a right/upper tail only
-        # right tail of Z-score, solve for which value matches the
-        iterative.libsize.cutoff.lo <- median(x) - (mad.score.threshold  * mad(x) )
-        #iterative.libsize.cutoff.hi <- median(x) + (mad.score.threshold  * mad(x) )
-        #only do this for lower tail.
-
-
-        #get cells outside threshold
-        bad <- x[x < iterative.libsize.cutoff.lo]
-        #bad <- x[x < iterative.libsize.cutoff.lo | x > iterative.libsize.cutoff.hi]
-
-        #exponentiate to get out of log space
-        #iterative.libsize.cutoff.hi <- exp(iterative.libsize.cutoff.hi)
-        iterative.libsize.cutoff.lo <- exp(iterative.libsize.cutoff.lo)
-
-
-        #get cells within threshold
-        filteredcells <- names(x[!names(x) %in% names(bad)] )
-
-
-        #plot cutoffs for library size / UMIs
-        g_lib_hist <- ggplot2::ggplot(seuratobjectclust@meta.data) +
-          ggplot2::geom_histogram(ggplot2::aes(nCount_RNA),
-                                  color="black", fill = "steelblue",
-                                  binwidth = 0.05)+
-          #ggplot2::geom_vline(xintercept = iterative.libsize.cutoff.hi, linetype = "dashed", colour = "red")+
-          ggplot2::geom_vline(xintercept =  iterative.libsize.cutoff.lo, linetype = "dashed", colour = "red")+
-          ggplot2::geom_vline(xintercept = median(seuratobjectclust@meta.data$nCount_RNA),
-                              linetype = "dotted", colour = "red", size = 1.2)+
-          ggplot2::scale_x_log10()+
-          ggplot2::labs(x = "nUMI, log10 scale",
-                        y = "Number of cells" ,
-                        subtitle = paste0("Median lib size = ", median(seuratobject@meta.data$nCount_RNA)),
-                        caption = paste0('nUMI cutoff = ', round(baselinefilter.libsize.cutoff.lo, digits = 3),
-                                         '\nNum cells presubset = ', ncol(seuratobject),
-                                         '\nNum cells remaining = ', length(filteredcells))  )+
-          ggplot2::theme_linedraw()
-
-        g_lib_vln <- ggplot2::ggplot(seuratobjectclust@meta.data, ggplot2::aes(x = 0, y = nCount_RNA))+
-          ggplot2::geom_violin(fill='steelblue')+
-          ggplot2::geom_jitter(height = 0, width = 0.25, size = 0.1)+
-          ggplot2::geom_hline(yintercept =  iterative.libsize.cutoff.lo, col = 'red', linetype = 'dashed')+
-          ggplot2::theme_linedraw()+
-          ggplot2::scale_y_log10()+
-          ggplot2::theme(axis.text.x=ggplot2::element_blank(),
-                axis.ticks.x=ggplot2::element_blank())+
-          ggplot2::labs(title = paste0("nUMI cutoff"),
-                        y = "nUMI, log10 scale",
-                        subtitle = paste0("low UMI cutoff: ", as.character(round(baselinefilter.libsize.cutoff.lo, digits = 3))) )+
-          ggplot2::xlab('Cells')
-
-
-
-        #report
-        cellstatus[cellstatus$barcodes %in% names(bad),"filteredout"] <- 'Yes'
-        cellstatus[cellstatus$barcodes %in% names(bad),"filterreason"] <- 'iterativefilter.libsize'
-
-
-        clustlist[['iterativefilter.libsize']] <- patchwork::wrap_plots(g_lib_vln+ggplot2::ggtitle(paste0('Cluster ', clust)), g_lib_hist)
-
-
-        seuratobjectclust <- subset(x = seuratobjectclust,
-                                    cells = filteredcells)
-
-
-      } #close iterative libsize loop
-
-
-      ########### ITERATIVE MITO FILTER  ###########
-      if(iterativefilter.mito == T){
-
-
-        #the use of median absolute deviation in outlier detection is inspired by the following:
-        # https://www.sciencedirect.com/science/article/abs/pii/S0022103113000668
-
-        #the adjustment for non-symmetric / long-tailed data is inspired by this:
-        # https://eurekastatistics.com/using-the-median-absolute-deviation-to-find-outliers/
-
-
-        # get variable, in this case mito
-        x <- seuratobjectclust$percent.mito
-
-        #instead of using normal mad (ie mad(x)),
-        # use an adjustment for long-tailed distributions by Peter Rosenmai
-        # this is the median of absolute deviations for points above the data median
-        right.mad <- median(   abs(x - median(x))[x > median(x)]    )
-
-        # get percent mito cutoff; use a right/upper tail only
-        # right tail of Z-score, solve for which value matches the
-        iterativefilter.mito.cutoff <- median(x) + (mad.score.threshold  * mad(x) )
-
-
-        #get cells above the threshold
-        bad <- x[x > iterativefilter.mito.cutoff]
-
-        #get cells within threshold
-        filteredcells <- names(x[!names(x) %in% names(bad)] )
-
-
-
-        gm <- ggplot2::ggplot(seuratobjectclust@meta.data, ggplot2::aes(x = 0, y = percent.mito))+
-          ggplot2::geom_violin(fill='steelblue')+
-          ggplot2::geom_jitter(height = 0, width = 0.25, size = 0.1)+
-          ggplot2::geom_hline(yintercept = iterativefilter.mito.cutoff, col = 'red', linetype = 'dashed')+
-          ggplot2::theme_linedraw()+
-          ggplot2::theme(axis.text.x=ggplot2::element_blank(),
-                axis.ticks.x=ggplot2::element_blank())+
-          ggplot2::labs(title = paste0("percent mito cutoff"),
-                         subtitle = paste0("Hi percent.mitop cutoff: ", as.character(round(baselinefilter.mito.cutoff, digits = 2))),
-                         caption = paste0('Percent.mito cutoff = ', round(baselinefilter.mito.cutoff, 2) ,
-                                          '\nNum cells presubset = ', ncol(seuratobject),
-                                          '\nNum cells remaining = ', length(filteredcells)))+
-          ggplot2::xlab('Cells')
-
-
-        #report
-        cellstatus[cellstatus$barcodes %in% names(bad),"filteredout"] <- 'Yes'
-        cellstatus[cellstatus$barcodes %in% names(bad),"filterreason"] <- 'iterativefilter.mito'
-
-        clustlist[['iterativefilter.mito']] <- gm
-
-        seuratobjectclust <- subset(x = seuratobjectclust,
-                                    cells = filteredcells)
-
-
-      } #end mito iterative block
-
-
-      iterativefilterresults[[clust]] <- clustlist
-
-    } #close cluster loop
-
-
-    reportlist[['iterativefilter']] <- iterativefilterresults
-
-
-  } # close iterative filter conditional loop
-
-
+  } #end mito baseline block
 
 
 
@@ -729,6 +474,7 @@ automatedfiltering <- function(
 
   #return whole result list.
   reportlist
+
 
 }
 

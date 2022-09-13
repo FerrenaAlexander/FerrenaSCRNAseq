@@ -291,3 +291,43 @@ pseudobulk <- function(obj, grouping_colname_in_md, metadata, rawh5_path, assay,
 
 }
 
+
+
+
+
+
+
+
+
+#' Calculate hemoglobin features in seurat object
+#'
+#' @param sobj seurat object
+#' @param hemoglobin.features character vector, hemoglobin gene symbols to search in dataset, default will search all mouse and human hemoglobin gene symbols
+#'
+#' @return data.frame with percent.hemoglobin in all cells
+#' @export
+#'
+#' @examples
+#' sobj[['percent.hemoglobin']] <- Seurat::PercentageFeatureSet(sobj, features = hemoglobin.features)
+calculate_percent.hemoglobin <- function(sobj, hemoglobin.features){
+
+
+  # is missing, check all human / mouse hemoglobin genes
+  if( missing(hemoglobin.features) ){
+    hemoglobin.features <- c('HBA1', 'HBA2', 'HBB', 'HBD', 'HBE1', 'HBG1', 'HBG2', 'HBM', 'HBQ1', 'HBZ',
+                             'Hba', 'Hba-a1', 'Hba-a2', 'Hba-ps3', 'Hba-ps4', 'Hba-x', 'Hbb', 'Hbb-ar', 'Hbb-b1', 'Hbb-b2', 'Hbb-bh0', 'Hbb-bh1', 'Hbb-bh2', 'Hbb-bh3', 'Hbb-bs', 'Hbb-bt', 'Hbb-y')
+  }
+
+
+  message('Calculating percent.hemoglobin')
+  #hemoglobin content, add to metadata
+
+  #hemoglobin features, all mouse and human hemoglobin genes are searched for, or hemoglobins are user-provided
+  hemoglobin.features <- hemoglobin.features[hemoglobin.features %in% rownames(sobj)]
+
+  Seurat::PercentageFeatureSet(sobj, features = hemoglobin.features)
+
+  message('Returning percent.hemoglobin as data.frame column\nMake sure to add to sobj$percent.hemoglobin')
+
+}
+

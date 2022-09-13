@@ -6,8 +6,7 @@ Authors@R:
            family = "Ferrena",
            role = c("aut", "cre"),
            email = "alexander.ferrena@einsteinmed.org")
-Description: This package is for QC, processing and analysis of scRNAseq data. For QC, it is meant to mitigate human biases by automating the selection of cutoffs for minimum library size and mitochondrial content.
-License: MIT + file LICENSE
+Description: This package is for QC, processing and analysis of scRNAseq data. 
 Encoding: UTF-8
 LazyData: true
 Roxygen: list(markdown = TRUE)
@@ -15,15 +14,15 @@ RoxygenNote: 7.2.1
 URL: https://github.com/FerrenaAlexander/FerrenaSCRNAseq
 BugReports: https://github.com/FerrenaAlexander/FerrenaSCRNAseq/issues
 Imports: 
-    cowplot,
     DoubletFinder,
-    ecp,
     ggplot2,
     outliers,
     patchwork,
     Seurat,
-    stringr
+    stringr,
+    dplyr
 Depends: 
-    R (>= 2.10)
+    R (>= 4.0)
 Remotes:
     chris-mcginnis-ucsf/DoubletFinder
+License: MIT + file LICENSE
