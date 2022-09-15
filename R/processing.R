@@ -18,10 +18,11 @@
 #' @param globalfilter.mito T/F, default T, whether to filter cells with higher than normal mito content
 #' @param globalfilter.libsize T/F, default T, whether to filter cells with lower than normal UMI content
 #'
-#' @return
+#' @return a list object. first element is cells, filter status, filter reason. second element is commands and options used. third element is summary of pre-filter QC information. remaining elements illustrate the filtering steps with plots and number of cells removed.
 #' @export
 #'
 #' @examples
+#' af <- autofilter(sobj)
 autofilter <- function(
     sobj,
 
@@ -455,26 +456,37 @@ autofilter <- function(
 
 #' DoubletFinder Wrapper
 #'
+#'
+#' Please see https://github.com/chris-mcginnis-ucsf/DoubletFinder
+#'
 #' Models homotypic doublets using the following table:
 #' https://kb.10xgenomics.com/hc/en-us/articles/360001378811-What-is-the-maximum-number-of-cells-that-can-be-profiled-
 #'
-#' @param seuratobject A Seurat object.
+#' @param seuratobject A Seurat object, pre-proc with `Seurat::SCTransform()`
 #' @param clusters string, should match a column name of seuratobject metadata with clusters or other cell group annotations. default = 'seurat_clusters'
+#' @param autofilterres optional, output of `FerrenaSCRNAseq::autofilter()` whether to return the the autofilter result with updated `autofilterres$cellstatus` taking into account doublet status
+#' @param num.cores integer, num.cores to use for `DoubletFinder::paramSweep_v3`
 #'
-#' @return a data.frame with barcodes and DoubletFinder classifications
+#' @return if `autofilterres` is provided, it will return `autofilterres` with updated `autofilterres$cellstatus`, if not it will return a data.frame with doublet information and score.
 #' @export
 #'
 #' @examples
-doubletfinderwrapper <- function(seuratobject, clusters){
+#' # With autofiler res, will add in the result to af$cellstatus
+#' af <- doubletfinderwrapper(sobj, autofilterres = af, num.cores = 5)
+#'
+#' # w/o autofilter res:
+#' ddf <- doubletfinderwrapper(sobj, num.cores = 5)
+doubletfinderwrapper <- function(seuratobject, clusters, autofilterres, num.cores){
 
   if( missing( clusters )) {clusters <- "seurat_clusters"}
   if( !(clusters %in% colnames(seuratobject@meta.data)) ) {stop('No clusters detected in Seurat object')}
 
+  if( missing(num.cores) ){num.cores <- 1}
 
   message('Running DoubletFinder paramsweep (may take a while)')
 
   #param sweep
-  sweepres <- DoubletFinder::paramSweep_v3(seu = seuratobject, PCs = 1:30, sct = T)
+  sweepres <- DoubletFinder::paramSweep_v3(seu = seuratobject, PCs = 1:30, sct = T, num.cores = num.cores)
 
   message('DF Parameter Sweep Completed')
 
@@ -501,6 +513,8 @@ doubletfinderwrapper <- function(seuratobject, clusters){
   #
   #   names(dratedf) <- c('MultipletRate', 'CellsLoaded_100%Viability', 'CellsRecovered')
 
+  dratedf <- FerrenaSCRNAseq::dratedf
+
   dbmodel <- lm(MultipletRate ~ CellsRecovered, data = dratedf)
 
   predicteddoubletrate <- as.numeric((dbmodel$coefficients['CellsRecovered'] * ncol(seuratobject)) + dbmodel$coefficients[1])
@@ -517,9 +531,35 @@ doubletfinderwrapper <- function(seuratobject, clusters){
   seuratobject <- suppressWarnings(DoubletFinder::doubletFinder_v3(seu = seuratobject, PCs = 1:30, pN = 0.25, pK = maxscorepk, nExp = nexppoi, sct = T))
 
   ddf <- data.frame(cells = rownames(seuratobject@meta.data),
-                    DoubletFinderClassification = seuratobject@meta.data[,ncol(seuratobject@meta.data)])
+                    DoubletFinderClassification = seuratobject@meta.data[,ncol(seuratobject@meta.data)],
+                    DoubletFinder_pANN_doublet_score = seuratobject@meta.data[,ncol(seuratobject@meta.data) - 1])
 
-  ddf
+  #if autofilterres is there,add it, if not just return the ddf
+  if( missing(autofilterres) ){
+    return(ddf)
+  } else{
+
+    message('\nAdding DoubletFinder result to autofilterres$cellstatus')
+    cellstatus <- autofilterres$cellstatus
+
+    cellstatus$DoubletFinder_pANN_doublet_score <- NA
+
+    cellstatus[match(ddf$cells, cellstatus$barcodes),'DoubletFinder_pANN_doublet_score'] <- ddf$DoubletFinder_pANN_doublet_score
+
+    #mark doublets as filt
+    ddf_d <- ddf[ddf$DoubletFinderClassification=='Doublet',]
+
+    cellstatus[match(ddf_d$cells, cellstatus$barcodes),"filteredout"] <- T
+    cellstatus[match(ddf_d$cells, cellstatus$barcodes),"filterreason"] <- 'DoubletFinder_doublet'
+
+
+    autofilterres$cellstatus <- cellstatus
+
+    return(autofilterres)
+
+
+
+  }
 
 }
 
@@ -550,16 +590,27 @@ doubletfinderwrapper <- function(seuratobject, clusters){
 # rawh5 <- '~/Dropbox/data/bangdata/scrnaseq-TKO-DKOAA-DKO/rawdata/Sample-06_TL494/filtered_feature_bc_matrix.h5'
 # rawh5 <- '~/Dropbox/data/bangdata/scrnaseq-TKO-DKOAA-DKO/rawdata/Sample-04_DJ582M11/filtered_feature_bc_matrix.h5'
 #
+# library(tidyverse) ; library(Seurat)
 # sobj <- CreateSeuratObject(   Read10X_h5(rawh5), min.cells= 3)
 #
 # af <- autofilter(sobj)
 #
 #
 # good <- af$cellstatus[af$cellstatus$filteredout==F,"barcodes"]
-
-
-
-
-
-
-
+#
+# sobj <- sobj[,good]
+#
+# #normalize and cluster
+# suppressWarnings(sobj <- Seurat::SCTransform(sobj, verbose = T, method="glmGamPoi"))
+#
+# sobj <- Seurat::RunPCA(object = sobj, verbose = F)
+#
+# sobj <- Seurat::FindNeighbors(object = sobj, dims = 1:30, verbose = F)
+# sobj <- Seurat::FindClusters(object = sobj, resolution = 0.1, verbose = F, algorithm = 1)
+#
+# sobj <- RunUMAP(sobj, dims = 1:30)
+#
+# af <- doubletfinderwrapper(sobj, autofilterres = af, num.cores = 5)
+#
+#
+#

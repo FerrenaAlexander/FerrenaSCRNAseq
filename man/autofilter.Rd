@@ -35,10 +35,16 @@ autofilter(
 
 \item{globalfilter.libsize}{T/F, default T, whether to filter cells with lower than normal UMI content}
 }
+\value{
+a list object. first element is cells, filter status, filter reason. second element is commands and options used. third element is summary of pre-filter QC information. remaining elements illustrate the filtering steps with plots and number of cells removed.
+}
 \description{
 Apply simple cutoffs and discover data-driven thresholds for poor quality cells in scRNAseq.
 }
 \details{
 Simple cutoffs include minimum number of UMIs, minimum number of unique genes detected, maximum percent mito, and maximum percent hemoglobin.
 More complex cutoffs are learnt for lower than expected complexity (defined for each cell as num unique genes / num UMIs). Additionally, median absolute deviation is used to exclude remaining cells with high mito content or low UMI content.
+}
+\examples{
+af <- autofilter(sobj)
 }
