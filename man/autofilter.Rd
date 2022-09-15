@@ -21,7 +21,7 @@ autofilter(
 
 \item{min_num_UMI}{numeric, default is 1000, if no filter is desired set to -Inf}
 
-\item{min_num_Feature}{numeric, default is 2, if no filter is desired set to -Inf}
+\item{min_num_Feature}{numeric, default is 200, if no filter is desired set to -Inf}
 
 \item{max_perc_mito}{numeric, default is 25, if no filter is desired set to Inf}
 

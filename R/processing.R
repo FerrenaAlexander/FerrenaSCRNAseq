@@ -10,7 +10,7 @@
 #'
 #' @param sobj seurat object
 #' @param min_num_UMI numeric, default is 1000, if no filter is desired set to -Inf
-#' @param min_num_Feature numeric, default is 2, if no filter is desired set to -Inf
+#' @param min_num_Feature numeric, default is 200, if no filter is desired set to -Inf
 #' @param max_perc_mito numeric, default is 25, if no filter is desired set to Inf
 #' @param max_perc_hemoglobin numeric, default is 25, if no filter is desired set to Inf
 #' @param mad.score.threshold numeric, default is 2.5, threshold for median abs deviation thresholding, ie cutoffs set to `median +/- mad * threshold`
@@ -590,7 +590,7 @@ doubletfinderwrapper <- function(seuratobject, clusters, autofilterres, num.core
 # rawh5 <- '~/Dropbox/data/bangdata/scrnaseq-TKO-DKOAA-DKO/rawdata/Sample-06_TL494/filtered_feature_bc_matrix.h5'
 # rawh5 <- '~/Dropbox/data/bangdata/scrnaseq-TKO-DKOAA-DKO/rawdata/Sample-04_DJ582M11/filtered_feature_bc_matrix.h5'
 #
-# library(tidyverse) ; library(Seurat)
+# library(tidyverse) ; library(Seurat) ; library(FerrenaSCRNAseq)
 # sobj <- CreateSeuratObject(   Read10X_h5(rawh5), min.cells= 3)
 #
 # af <- autofilter(sobj)
@@ -611,6 +611,6 @@ doubletfinderwrapper <- function(seuratobject, clusters, autofilterres, num.core
 # sobj <- RunUMAP(sobj, dims = 1:30)
 #
 # af <- doubletfinderwrapper(sobj, autofilterres = af, num.cores = 5)
-#
-#
-#
+
+
+
