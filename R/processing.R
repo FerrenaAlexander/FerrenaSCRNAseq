@@ -62,7 +62,7 @@ autofilter <- function(
   reportlist <- list()
 
   #start keeping a cell status DF
-  cellstatus <- data.frame(barcodes = colnames(sobj), filteredout = 'No', filterreason = 'Unfiltered')
+  cellstatus <- data.frame(barcodes = colnames(sobj), filteredout = F, filterreason = 'Unfiltered')
 
   reportlist[['cellstatus']] <- cellstatus
 
@@ -116,7 +116,7 @@ autofilter <- function(
 
   bad <- md[md$nCount_RNA < min_num_UMI | md$nFeature_RNA < min_num_Feature | md$percent.mito > max_perc_mito | md$percent.hemoglobin > max_perc_hemoglobin,]
 
-  cellstatus[cellstatus$barcodes %in% rownames(bad),"filteredout"] <- 'Yes'
+  cellstatus[cellstatus$barcodes %in% rownames(bad),"filteredout"] <- T
   cellstatus[cellstatus$barcodes %in% rownames(bad),"filterreason"] <- 'BasicFilter'
 
 
@@ -150,7 +150,7 @@ autofilter <- function(
 
 
   #retain good cells
-  good <- cellstatus[cellstatus$filteredout=='No',"barcodes"]
+  good <- cellstatus[cellstatus$filteredout==F,"barcodes"]
   sobj <- sobj[,good]
 
 
@@ -245,7 +245,7 @@ autofilter <- function(
     sobj <- sobj[,filteredcells]
 
     #report
-    cellstatus[cellstatus$barcodes %in% bad,"filteredout"] <- 'Yes'
+    cellstatus[cellstatus$barcodes %in% bad,"filteredout"] <- T
     cellstatus[cellstatus$barcodes %in% bad,"filterreason"] <- 'globalfilter.complexity'
 
 
@@ -335,7 +335,7 @@ autofilter <- function(
 
 
     #report
-    cellstatus[cellstatus$barcodes %in% names(bad),"filteredout"] <- 'Yes'
+    cellstatus[cellstatus$barcodes %in% names(bad),"filteredout"] <- T
     cellstatus[cellstatus$barcodes %in% names(bad),"filterreason"] <- 'globalfilter.libsize'
 
 
@@ -415,7 +415,7 @@ autofilter <- function(
 
 
     #report
-    cellstatus[cellstatus$barcodes %in% names(bad),"filteredout"] <- 'Yes'
+    cellstatus[cellstatus$barcodes %in% names(bad),"filteredout"] <- T
     cellstatus[cellstatus$barcodes %in% names(bad),"filterreason"] <- 'globalfilter.mito'
 
 
@@ -453,6 +453,82 @@ autofilter <- function(
 
 
 
+#' DoubletFinder Wrapper
+#'
+#' Models homotypic doublets using the following table:
+#' https://kb.10xgenomics.com/hc/en-us/articles/360001378811-What-is-the-maximum-number-of-cells-that-can-be-profiled-
+#'
+#' @param seuratobject A Seurat object.
+#' @param clusters string, should match a column name of seuratobject metadata with clusters or other cell group annotations. default = 'seurat_clusters'
+#'
+#' @return a data.frame with barcodes and DoubletFinder classifications
+#' @export
+#'
+#' @examples
+doubletfinderwrapper <- function(seuratobject, clusters){
+
+  if( missing( clusters )) {clusters <- "seurat_clusters"}
+  if( !(clusters %in% colnames(seuratobject@meta.data)) ) {stop('No clusters detected in Seurat object')}
+
+
+  message('Running DoubletFinder paramsweep (may take a while)')
+
+  #param sweep
+  sweepres <- DoubletFinder::paramSweep_v3(seu = seuratobject, PCs = 1:30, sct = T)
+
+  message('DF Parameter Sweep Completed')
+
+  sweepstats <- DoubletFinder::summarizeSweep(sweepres)
+
+  pdf(NULL) #prevent plotted output
+  bcmvn <- DoubletFinder::find.pK(sweepstats)
+  dev.off()
+
+  maxscorepk <- bcmvn[bcmvn$BCmetric == max(bcmvn$BCmetric),2]
+  maxscorepk <- as.numeric( levels(maxscorepk)[maxscorepk] )
+
+
+
+
+
+  #homotypic doublet modelling
+
+  ### using 10x table, use linear regression --> important for predicting homotypic / total doublet number
+  #tamlabscpipeline::dratedf
+  #dratedf <- read.delim('/Users/ferrenaa/Documents/tam/scripts/doublets/doubletrate.txt', header = T)
+  #
+  #   dratedf[,1] <- as.numeric(sub("%","",dratedf[,1]))/100
+  #
+  #   names(dratedf) <- c('MultipletRate', 'CellsLoaded_100%Viability', 'CellsRecovered')
+
+  dbmodel <- lm(MultipletRate ~ CellsRecovered, data = dratedf)
+
+  predicteddoubletrate <- as.numeric((dbmodel$coefficients['CellsRecovered'] * ncol(seuratobject)) + dbmodel$coefficients[1])
+
+  #choose annotations to model homotypic doublets
+  homotypicprop <- DoubletFinder::modelHomotypic(    as.vector(  seuratobject@meta.data[,clusters] )   )
+
+  nexppoi <- round(predicteddoubletrate * length(rownames(seuratobject@meta.data)))
+  nexppoiadj <- round(nexppoi * (1 - homotypicprop))
+
+  #classify doublets
+  message('Initiating third-pass clustering for doublet estimation:\n')
+
+  seuratobject <- suppressWarnings(DoubletFinder::doubletFinder_v3(seu = seuratobject, PCs = 1:30, pN = 0.25, pK = maxscorepk, nExp = nexppoi, sct = T))
+
+  ddf <- data.frame(cells = rownames(seuratobject@meta.data),
+                    DoubletFinderClassification = seuratobject@meta.data[,ncol(seuratobject@meta.data)])
+
+  ddf
+
+}
+
+
+
+
+
+
+
 
 ### testing below
 
@@ -475,4 +551,15 @@ autofilter <- function(
 # rawh5 <- '~/Dropbox/data/bangdata/scrnaseq-TKO-DKOAA-DKO/rawdata/Sample-04_DJ582M11/filtered_feature_bc_matrix.h5'
 #
 # sobj <- CreateSeuratObject(   Read10X_h5(rawh5), min.cells= 3)
+#
+# af <- autofilter(sobj)
+#
+#
+# good <- af$cellstatus[af$cellstatus$filteredout==F,"barcodes"]
+
+
+
+
+
+
 
