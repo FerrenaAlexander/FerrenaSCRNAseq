@@ -8,24 +8,33 @@
 #'
 #'
 #'
+#'
 #' @param labelsdf data.frame with two columns of raw categorical label: for example, each row is a cell (or other observation), and each column is metadata column 1 and metadata column 2
+#' @param repel T/F, whether to repel the labels, default = T
+#' @param nudge_x numeric, default nudge to the left and right of the repel labels, default 0.2
 #' @param ggfittext T/F - whether to use ggfittext, to try to squeeze or remove tiny stratum labels
+#' @param ...
 #'
 #' @return a ggplot object
 #' @export
 #'
 #' @examples
-#' #' labelsdf can look like this, row.names of cells not needed, just two columns of categorical data as a data.frame:
+#' #labelsdf can look like this, row.names of cells not needed,
+#' # just two columns of categorical data as a data.frame:
 #'                      From      To
 #' AACCCAAGCATGCGA-1    Malignant  2
 #' AAACCCAAGTAGGTTA-1    Malignant  2
 #' AAACCCACAAAGCACG-1   Neutrophil  0
 #' AAACCCACAGCAGTAG-1    Malignant  2
 #' AAACCCACATACCGTA-1    Malignant  2
-alluvialplot <- function(labelsdf, ggfittext){
+alluvialplot <- function(labelsdf, repel, nudge_x, ggfittext, ...){
 
+
+  if( missing(repel) ){ repel = T}
+  if( missing(nudge_x) ){nudge_x = 0.3}
 
   if( missing(ggfittext) ){ggfittext = F}
+
 
   #if levels not set, get them by ordering hi > lo
 
@@ -78,8 +87,26 @@ alluvialplot <- function(labelsdf, ggfittext){
       theme_void()
 
 
-  } else{
+  } else if(repel==T){
 
+    require(ggrepel)
+
+    ap <- ggplot(longfreqs, aes(y = Freq, axis1=.data[[colnames(longfreqs[1])]], axis2= .data[[colnames(longfreqs[2])]] ) )+
+      scale_x_discrete(expand = c(.4, 0))+
+      geom_alluvium( aes(fill= .data[[colnames(longfreqs[1])]] ), width = 1/4 ) +
+      geom_stratum(width = 1/4) +
+      scale_linetype_manual(values = c("blank", "solid")) +
+
+      ggrepel::geom_label_repel(
+        aes(label = .data[[colnames(longfreqs[1])]] ),
+        stat = "stratum", nudge_x = nudge_x * -1, ...) +
+
+      ggrepel::geom_label_repel(
+        aes(label = .data[[colnames(longfreqs[2])]]),
+        stat = "stratum", nudge_x = nudge_x, ...) +
+      theme_void()
+
+  } else{
 
     ap <- ggplot(longfreqs, aes(y = Freq, axis1=.data[[colnames(longfreqs[1])]], axis2= .data[[colnames(longfreqs[2])]] ) )+
       geom_alluvium(aes(fill= .data[[colnames(longfreqs[1])]] )) +
@@ -90,11 +117,10 @@ alluvialplot <- function(labelsdf, ggfittext){
 
 
   }
-
-
   ap
 
 }
+
 
 
 

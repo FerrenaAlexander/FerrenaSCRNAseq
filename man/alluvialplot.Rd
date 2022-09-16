@@ -4,12 +4,18 @@
 \alias{alluvialplot}
 \title{Create an alluvial plot from long categorical data}
 \usage{
-alluvialplot(labelsdf, ggfittext)
+alluvialplot(labelsdf, repel, nudge_x, ggfittext, ...)
 }
 \arguments{
 \item{labelsdf}{data.frame with two columns of raw categorical label: for example, each row is a cell (or other observation), and each column is metadata column 1 and metadata column 2}
 
+\item{repel}{T/F, whether to repel the labels, default = T}
+
+\item{nudge_x}{numeric, default nudge to the left and right of the repel labels, default 0.2}
+
 \item{ggfittext}{T/F - whether to use ggfittext, to try to squeeze or remove tiny stratum labels}
+
+\item{...}{}
 }
 \value{
 a ggplot object
@@ -18,7 +24,8 @@ a ggplot object
 Wrapper around ggalluvium package for ggplot based alluvial plot, for quickly making alluvial plot from "long", "raw" categorical data (such as Seurat object meta.data), rather than two-way counts of categories.
 }
 \examples{
-#' labelsdf can look like this, row.names of cells not needed, just two columns of categorical data as a data.frame:
+#labelsdf can look like this, row.names of cells not needed,
+# just two columns of categorical data as a data.frame:
                      From      To
 AACCCAAGCATGCGA-1    Malignant  2
 AAACCCAAGTAGGTTA-1    Malignant  2
