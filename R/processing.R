@@ -8,11 +8,14 @@
 #' Simple cutoffs include minimum number of UMIs, minimum number of unique genes detected, maximum percent mito, and maximum percent hemoglobin.
 #' More complex cutoffs are learnt for lower than expected complexity (defined for each cell as num unique genes / num UMIs). Additionally, median absolute deviation is used to exclude remaining cells with high mito content or low UMI content.
 #'
+#' Specifically, for complexity, a two-part model is used to model log(num Genes) ~ log(num UMIs) for each cell. A linear model and a Loess model are both set up in this way. Outliers with low complexity are called as cells with > 4/n cooks distance cells in the linear model, and low residuals in the loess model. The residual cutoff is set to -3 by default, capturing very low complexity outlier cells.
+#'
 #' @param sobj seurat object
 #' @param min_num_UMI numeric, default is 1000, if no filter is desired set to -Inf
 #' @param min_num_Feature numeric, default is 200, if no filter is desired set to -Inf
 #' @param max_perc_mito numeric, default is 25, if no filter is desired set to Inf
 #' @param max_perc_hemoglobin numeric, default is 25, if no filter is desired set to Inf
+#' @param loess_negative_residual_threshold numeric, cutoff for loess residuals applied in complexity filtering, default is -3, if you set it high (ie any higher than -2) you will probably remove many good cells.
 #' @param mad.score.threshold numeric, default is 2.5, threshold for median abs deviation thresholding, ie cutoffs set to `median +/- mad * threshold`
 #' @param globalfilter.complexity T/F, default T, whether to filter cells with lower than expected number of genes given number of UMIs
 #' @param globalfilter.mito T/F, default T, whether to filter cells with higher than normal mito content
@@ -21,11 +24,17 @@
 #' @return a list object.
 #'
 #' 'cellstatus' = data.frame with cells, filtered out (T/F), filter reason, and other information.
+#'
 #' 'filtersummary' = small data.frame summarizing the `cellstatus$filterreason` information.
+#'
 #' 'allcommands' = commands passed to the autofilter function
+#'
 #' 'baseline_qc_summary' = summarizes distributions of key QC variables
+#'
 #' 'globalfilter.complexity' = summarizes the complexity filtering with plots and number cells removed
+#'
 #' 'globalfilter.libsize' = summarizes the libsize filtering with plots and number cells removed
+#'
 #' 'globalfilter.mito' = summarizes the mito filtering with plots and number cells removed
 #' @export
 #'
@@ -34,8 +43,8 @@
 #' af <- autofilter(sobj)
 #'
 #' # remove outliers
-#'  goodcells <- af$cellstatus[af$cellstatus$filteredout==F,"barcodes"]
-#'  sobj <- sobj[,goodcells]
+#' goodcells <- af$cellstatus[af$cellstatus$filteredout==F,"barcodes"]
+#' sobj <- sobj[,goodcells]
 autofilter <- function(
     sobj,
 
@@ -43,6 +52,8 @@ autofilter <- function(
     min_num_Feature,
     max_perc_mito,
     max_perc_hemoglobin,
+
+    loess_negative_residual_threshold,
 
     mad.score.threshold,
 
@@ -61,6 +72,8 @@ autofilter <- function(
   if( missing(max_perc_mito ) ){max_perc_mito <- 25}
   if( missing(max_perc_hemoglobin ) ){max_perc_hemoglobin <- 25}
 
+  #set lowess cutoff
+  if( missing( loess_negative_residual_threshold )) {loess_negative_residual_threshold <- -3}
 
   #set maximum distance of deviations from median tolerated before outlier classification
   if( missing( mad.score.threshold )) {mad.score.threshold <- 2.5}
@@ -88,11 +101,11 @@ autofilter <- function(
 
   #report commands used
   reportlist[['allcommands']] <- data.frame(
-    Command = c("mad.score.threshold",
+    Command = c("mad.score.threshold", "loess_negative_residual_threshold",
                 'min_num_UMI', 'min_num_Feature', 'max_perc_mito', 'max_perc_hemoglobin',
                 "globalfilter.complexity", "globalfilter.libsize", "globalfilter.mito"),
 
-    Option = c(mad.score.threshold,
+    Option = c(mad.score.threshold, loess_negative_residual_threshold,
                min_num_UMI, min_num_Feature, max_perc_mito, max_perc_hemoglobin,
                globalfilter.complexity, globalfilter.libsize, globalfilter.mito)
 
@@ -212,7 +225,7 @@ autofilter <- function(
                                resid_loess = resid_loess)
 
     #to be an outlier, must have scaled loess residuals < -1 and lm cooks distance > 4/n
-    outs <- rownames( out_decision[out_decision$cd_lm > (4 / nrow(out_decision)) & out_decision$resid_loess < -3,] )
+    outs <- rownames( out_decision[out_decision$cd_lm > (4 / nrow(out_decision)) & out_decision$resid_loess < loess_negative_residual_threshold,] )
 
     #plot outliers
     md$outlier <- 'nonoutlier'
@@ -223,7 +236,7 @@ autofilter <- function(
     complexityplot.outliers <- ggplot2::ggplot(md, ggplot2::aes(log(nCount_RNA), log(nFeature_RNA), col = outlier)) +
       ggplot2::geom_point(alpha = 0.7, size = 0.7)+
       ggplot2::scale_color_brewer(palette = 'Set1', direction = -1)+
-      ggplot2::labs( caption = 'Outliers = Cooks Distance > (4/n)\n& Loess residual < -2' )
+      ggplot2::labs( caption = paste0('Outliers = Cooks Distance > (4/n)\n& Loess residual < ',loess_negative_residual_threshold) )
 
 
     #plot the relationship; we must use log transforms to see things more clearly.
@@ -239,14 +252,14 @@ autofilter <- function(
     cp_lm_cd <- ggplot2::ggplot(md, ggplot2::aes(log(nCount_RNA), log(nFeature_RNA), col = CooksDistance_lm)) +
       ggplot2::geom_point(alpha = 0.7, size = 0.7)+
       ggplot2::geom_smooth(method = 'lm')+
-      ggplot2::scale_color_gradient(high = 'red')+
+      ggplot2::scale_color_gradient2(high = 'red', low = 'blue', mid = 'grey'  )+
       ggplot2::labs(caption = paste0('Cutoff = cooks > 4 / N, here = ', round(4/nrow(md), 5) ) )
 
     cp_ls_rd <- ggplot2::ggplot(md, ggplot2::aes(log(nCount_RNA), log(nFeature_RNA), col = resid_loess)) +
       ggplot2::geom_point(alpha = 0.7, size = 0.7)+
       ggplot2::geom_smooth(method = 'loess')+
       ggplot2::scale_color_gradient2(mid = 'grey', low = 'red', high = 'blue')+
-      ggplot2::labs(caption = 'Cutoff = loess residuals < -2' )
+      ggplot2::labs(caption = paste('Cutoff = loess residuals < ', loess_negative_residual_threshold ))
 
 
     finalplot <- patchwork::wrap_plots(complexityplot,complexityplot.outliers, cp_lm_cd, cp_ls_rd)+
@@ -471,6 +484,7 @@ autofilter <- function(
   filtersummary <- rbind(filtersummary, tot)
   reportlist$filtersummary <- filtersummary
 
+
   #return whole result list.
   reportlist
 
@@ -615,7 +629,7 @@ doubletfinderwrapper <- function(seuratobject, clusters, autofilterres, num.core
 # max_perc_mito <- 25
 # max_perc_hemoglobin <- 25
 #
-#
+# loess_negative_residual_threshold <- -3
 # mad.score.threshold = 2.5
 # globalfilter.complexity <- T
 # globalfilter.mito <- T
@@ -650,6 +664,6 @@ doubletfinderwrapper <- function(seuratobject, clusters, autofilterres, num.core
 #
 # af <- doubletfinderwrapper(sobj, autofilterres = af,
 #                            num.cores = 5)
-#
-#
+
+
 

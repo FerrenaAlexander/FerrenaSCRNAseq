@@ -10,6 +10,7 @@ autofilter(
   min_num_Feature,
   max_perc_mito,
   max_perc_hemoglobin,
+  loess_negative_residual_threshold,
   mad.score.threshold,
   globalfilter.complexity,
   globalfilter.mito,
@@ -27,6 +28,8 @@ autofilter(
 
 \item{max_perc_hemoglobin}{numeric, default is 25, if no filter is desired set to Inf}
 
+\item{loess_negative_residual_threshold}{numeric, cutoff for loess residuals applied in complexity filtering, default is -3, if you set it high (ie any higher than -2) you will probably remove many good cells.}
+
 \item{mad.score.threshold}{numeric, default is 2.5, threshold for median abs deviation thresholding, ie cutoffs set to \verb{median +/- mad * threshold}}
 
 \item{globalfilter.complexity}{T/F, default T, whether to filter cells with lower than expected number of genes given number of UMIs}
@@ -39,11 +42,17 @@ autofilter(
 a list object.
 
 'cellstatus' = data.frame with cells, filtered out (T/F), filter reason, and other information.
+
 'filtersummary' = small data.frame summarizing the \code{cellstatus$filterreason} information.
+
 'allcommands' = commands passed to the autofilter function
+
 'baseline_qc_summary' = summarizes distributions of key QC variables
+
 'globalfilter.complexity' = summarizes the complexity filtering with plots and number cells removed
+
 'globalfilter.libsize' = summarizes the libsize filtering with plots and number cells removed
+
 'globalfilter.mito' = summarizes the mito filtering with plots and number cells removed
 }
 \description{
@@ -52,12 +61,14 @@ Apply simple cutoffs and discover data-driven thresholds for poor quality cells 
 \details{
 Simple cutoffs include minimum number of UMIs, minimum number of unique genes detected, maximum percent mito, and maximum percent hemoglobin.
 More complex cutoffs are learnt for lower than expected complexity (defined for each cell as num unique genes / num UMIs). Additionally, median absolute deviation is used to exclude remaining cells with high mito content or low UMI content.
+
+Specifically, for complexity, a two-part model is used to model log(num Genes) ~ log(num UMIs) for each cell. A linear model and a Loess model are both set up in this way. Outliers with low complexity are called as cells with > 4/n cooks distance cells in the linear model, and low residuals in the loess model. The residual cutoff is set to -3 by default, capturing very low complexity outlier cells.
 }
 \examples{
 # identify outliers
 af <- autofilter(sobj)
 
 # remove outliers
- goodcells <- af$cellstatus[af$cellstatus$filteredout==F,"barcodes"]
- sobj <- sobj[,goodcells]
+goodcells <- af$cellstatus[af$cellstatus$filteredout==F,"barcodes"]
+sobj <- sobj[,goodcells]
 }
