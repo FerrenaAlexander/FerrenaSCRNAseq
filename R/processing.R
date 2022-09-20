@@ -18,7 +18,15 @@
 #' @param globalfilter.mito T/F, default T, whether to filter cells with higher than normal mito content
 #' @param globalfilter.libsize T/F, default T, whether to filter cells with lower than normal UMI content
 #'
-#' @return a list object. first element is cells, filter status, filter reason. second element is commands and options used. third element is summary of pre-filter QC information. remaining elements illustrate the filtering steps with plots and number of cells removed.
+#' @return a list object.
+#'
+#' 'cellstatus' = data.frame with cells, filtered out (T/F), filter reason, and other information.
+#' 'filtersummary' = small data.frame summarizing the `cellstatus$filterreason` information.
+#' 'allcommands' = commands passed to the autofilter function
+#' 'baseline_qc_summary' = summarizes distributions of key QC variables
+#' 'globalfilter.complexity' = summarizes the complexity filtering with plots and number cells removed
+#' 'globalfilter.libsize' = summarizes the libsize filtering with plots and number cells removed
+#' 'globalfilter.mito' = summarizes the mito filtering with plots and number cells removed
 #' @export
 #'
 #' @examples
@@ -74,6 +82,8 @@ autofilter <- function(
 
 
 
+  #start making summary of removed cells
+  reportlist[['filtersummary']] <- list()
 
 
   #report commands used
@@ -109,7 +119,7 @@ autofilter <- function(
 
   #report baseline stuff
   md <- sobj@meta.data
-  reportlist[['baseline_summary']] <- data.frame(summary_nCount_RNA = as.vector(summary(md$nCount_RNA)),
+  reportlist[['baseline_qc_summary']] <- data.frame(summary_nCount_RNA = as.vector(summary(md$nCount_RNA)),
                                                  summary_nFeature_RNA = as.vector(summary(md$nFeature_RNA)),
                                                  summary_perc.mito = as.vector(summary(md$percent.mito)),
                                                  summary_perc.hemoglobin = as.vector(summary(md$percent.hemoglobin)),
@@ -127,30 +137,31 @@ autofilter <- function(
 
 
   cellstatus$BasicFilter <- 'No'
+  cellstatus[cellstatus$filterreason == 'BasicFilter', 'BasicFilter'] <- 'BasicFilter'
 
   #add reasons for filtering
   #min UMI:
   explanation_string <- paste0('_nUMI-below-', min_num_UMI)
   bad_reason <- rownames( bad[bad$nCount_RNA < min_num_UMI,] )
-  cellstatus[ cellstatus$barcodes %in% bad_reason , 'BasicFilter'] <- paste0(cellstatus[ cellstatus$barcodes %in% bad_reason , 'filterreason'],
+  cellstatus[ cellstatus$barcodes %in% bad_reason , 'BasicFilter'] <- paste0(cellstatus[ cellstatus$barcodes %in% bad_reason , 'BasicFilter'],
                                                                              explanation_string)
 
   #min feature:
   explanation_string <- paste0('_nFeature-below-', min_num_Feature)
   bad_reason <- rownames( bad[bad$nFeature_RNA < min_num_Feature,] )
-  cellstatus[ cellstatus$barcodes %in% bad_reason , 'BasicFilter'] <- paste0(cellstatus[ cellstatus$barcodes %in% bad_reason , 'filterreason'],
+  cellstatus[ cellstatus$barcodes %in% bad_reason , 'BasicFilter'] <- paste0(cellstatus[ cellstatus$barcodes %in% bad_reason , 'BasicFilter'],
                                                                              explanation_string)
 
   #max mito:
-  explanation_string <- paste0('_percent.mito-above', max_perc_mito)
+  explanation_string <- paste0('_percent.mito-above-', max_perc_mito)
   bad_reason <- rownames( bad[bad$percent.mito > max_perc_mito,] )
-  cellstatus[ cellstatus$barcodes %in% bad_reason , 'BasicFilter'] <- paste0(cellstatus[ cellstatus$barcodes %in% bad_reason , 'filterreason'],
+  cellstatus[ cellstatus$barcodes %in% bad_reason , 'BasicFilter'] <- paste0(cellstatus[ cellstatus$barcodes %in% bad_reason , 'BasicFilter'],
                                                                              explanation_string)
 
   #max hemoglobin:
-  explanation_string <- paste0('_percent.hemoglobin-above', max_perc_hemoglobin)
+  explanation_string <- paste0('_percent.hemoglobin-above-', max_perc_hemoglobin)
   bad_reason <- rownames( bad[bad$percent.hemoglobin > max_perc_hemoglobin,] )
-  cellstatus[ cellstatus$barcodes %in% bad_reason , 'BasicFilter'] <- paste0(cellstatus[ cellstatus$barcodes %in% bad_reason , 'filterreason'],
+  cellstatus[ cellstatus$barcodes %in% bad_reason , 'BasicFilter'] <- paste0(cellstatus[ cellstatus$barcodes %in% bad_reason , 'BasicFilter'],
                                                                              explanation_string)
 
 
@@ -450,6 +461,16 @@ autofilter <- function(
   #update reportlist with finalized cellstatus:
   reportlist[["cellstatus"]] <- cellstatus
 
+
+  # update reportlist with summary of filterng results
+  filtersummary <- data.frame(table(cellstatus$filterreason))
+  colnames(filtersummary) <- c('FilterReason', 'numCells')
+
+  tot <- data.frame(FilterReason = 'Total', numCells = nrow(cellstatus))
+
+  filtersummary <- rbind(filtersummary, tot)
+  reportlist$filtersummary <- filtersummary
+
   #return whole result list.
   reportlist
 
@@ -631,4 +652,4 @@ doubletfinderwrapper <- function(seuratobject, clusters, autofilterres, num.core
 #                            num.cores = 5)
 #
 #
-#
+

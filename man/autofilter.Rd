@@ -36,7 +36,15 @@ autofilter(
 \item{globalfilter.libsize}{T/F, default T, whether to filter cells with lower than normal UMI content}
 }
 \value{
-a list object. first element is cells, filter status, filter reason. second element is commands and options used. third element is summary of pre-filter QC information. remaining elements illustrate the filtering steps with plots and number of cells removed.
+a list object.
+
+'cellstatus' = data.frame with cells, filtered out (T/F), filter reason, and other information.
+'filtersummary' = small data.frame summarizing the \code{cellstatus$filterreason} information.
+'allcommands' = commands passed to the autofilter function
+'baseline_qc_summary' = summarizes distributions of key QC variables
+'globalfilter.complexity' = summarizes the complexity filtering with plots and number cells removed
+'globalfilter.libsize' = summarizes the libsize filtering with plots and number cells removed
+'globalfilter.mito' = summarizes the mito filtering with plots and number cells removed
 }
 \description{
 Apply simple cutoffs and discover data-driven thresholds for poor quality cells in scRNAseq.
