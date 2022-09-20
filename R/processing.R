@@ -22,7 +22,12 @@
 #' @export
 #'
 #' @examples
+#' # identify outliers
 #' af <- autofilter(sobj)
+#'
+#' # remove outliers
+#'  goodcells <- af$cellstatus[af$cellstatus$filteredout==F,"barcodes"]
+#'  sobj <- sobj[,goodcells]
 autofilter <- function(
     sobj,
 
@@ -196,7 +201,7 @@ autofilter <- function(
                                resid_loess = resid_loess)
 
     #to be an outlier, must have scaled loess residuals < -1 and lm cooks distance > 4/n
-    outs <- rownames( out_decision[out_decision$cd_lm > (4 / nrow(out_decision)) & out_decision$resid_loess < -2,] )
+    outs <- rownames( out_decision[out_decision$cd_lm > (4 / nrow(out_decision)) & out_decision$resid_loess < -3,] )
 
     #plot outliers
     md$outlier <- 'nonoutlier'
@@ -474,8 +479,16 @@ autofilter <- function(
 #' # With autofiler res, will add in the result to af$cellstatus
 #' af <- doubletfinderwrapper(sobj, autofilterres = af, num.cores = 5)
 #'
+#' # remove doublets
+#' goodcells <- af$cellstatus[af$cellstatus$filteredout==F,"barcodes"]
+#' sobj <- sobj[,goodcells]
+#'
 #' # w/o autofilter res:
 #' ddf <- doubletfinderwrapper(sobj, num.cores = 5)
+#'
+#' # remove doublets
+#' singlets <- dfdf[dfdf$DoubletFinderClassification=='Singlet','cells']
+#' sobj <- sobj[,singlets]
 doubletfinderwrapper <- function(seuratobject, clusters, autofilterres, num.cores){
 
   if( missing( clusters )) {clusters <- "seurat_clusters"}
@@ -596,9 +609,9 @@ doubletfinderwrapper <- function(seuratobject, clusters, autofilterres, num.core
 # af <- autofilter(sobj)
 #
 #
-# good <- af$cellstatus[af$cellstatus$filteredout==F,"barcodes"]
+# goodcells <- af$cellstatus[af$cellstatus$filteredout==F,"barcodes"]
 #
-# sobj <- sobj[,good]
+# sobj <- sobj[,goodcells]
 #
 # #normalize and cluster
 # suppressWarnings(sobj <- Seurat::SCTransform(sobj, verbose = T, method="glmGamPoi"))
@@ -610,7 +623,12 @@ doubletfinderwrapper <- function(seuratobject, clusters, autofilterres, num.core
 #
 # sobj <- RunUMAP(sobj, dims = 1:30)
 #
-# af <- doubletfinderwrapper(sobj, autofilterres = af, num.cores = 5)
-
-
-
+# # get the doubletfinder  dataframe
+# dfdf <- doubletfinderwrapper(sobj, #autofilterres = af,
+#                              num.cores = 5)
+#
+# af <- doubletfinderwrapper(sobj, autofilterres = af,
+#                            num.cores = 5)
+#
+#
+#

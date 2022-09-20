@@ -46,5 +46,10 @@ Simple cutoffs include minimum number of UMIs, minimum number of unique genes de
 More complex cutoffs are learnt for lower than expected complexity (defined for each cell as num unique genes / num UMIs). Additionally, median absolute deviation is used to exclude remaining cells with high mito content or low UMI content.
 }
 \examples{
+# identify outliers
 af <- autofilter(sobj)
+
+# remove outliers
+ goodcells <- af$cellstatus[af$cellstatus$filteredout==F,"barcodes"]
+ sobj <- sobj[,goodcells]
 }
