@@ -574,7 +574,7 @@ doubletfinderwrapper <- function(seuratobject, clusters, autofilterres, num.core
   nexppoiadj <- round(nexppoi * (1 - homotypicprop))
 
   #classify doublets
-  message('Initiating third-pass clustering for doublet estimation:\n')
+  message('Final DoubletFinder run:')
 
   seuratobject <- suppressWarnings(DoubletFinder::doubletFinder_v3(seu = seuratobject, PCs = 1:30, pN = 0.25, pK = maxscorepk, nExp = nexppoi, sct = T))
 
@@ -602,6 +602,17 @@ doubletfinderwrapper <- function(seuratobject, clusters, autofilterres, num.core
 
 
     autofilterres$cellstatus <- cellstatus
+
+    # update reportlist with summary of filterng results
+    filtersummary <- data.frame(table(cellstatus$filterreason))
+    colnames(filtersummary) <- c('FilterReason', 'numCells')
+
+    tot <- data.frame(FilterReason = 'Total', numCells = nrow(cellstatus))
+
+    filtersummary <- rbind(filtersummary, tot)
+    autofilterres$filtersummary <- filtersummary
+
+
 
     return(autofilterres)
 
