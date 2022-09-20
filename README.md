@@ -6,7 +6,7 @@
 <!-- badges: start -->
 <!-- badges: end -->
 
-The goal of FerrenaSCRNAseq is to perform QC, processing, and analysis
+The goal of FerrenaSCRNAseq is to aid with QC, preprocessing, and analysis
 of scRNAseq data.
 
 ## Installation
@@ -22,99 +22,71 @@ devtools::install_github("FerrenaAlexander/FerrenaSCRNAseq")
 
 This package works with Seurat objects.
 
-The idea is to automatically filter out poor quality cells, defined as
-cells with high mito content, low UMI, low “complexity” (lower genes
-than expected given nUMI)
+The core function is called `FerrenaSCRNAseq::autofilter()`. This function selects poor quality cells that are outliers relative to the rest of the data.
 
-*I suggest you pre-process with Seurat’s SingleCellTransform (SCT)
-pipeline and run clustering on un-filtered data.* This allows cell-type
-specific QC filtering. Sometimes, mito conent, number of UMI or number
-of genes is actually a function of cell type. So global cutoffs suffer
-from lack of both specificity and sensitivity, by throwing out cells
-that are actually good, and keeping cells that are actually bad. So
-adjusting for cell type is pretty important.
+* baseline cutoffs of minimum number of UMIs (default is 1000); minimum number of genes (default is 200); maximum percent mitochondrial content (max 25%); max percent hemoglobin content (max 25%)
 
-It works by multivariable linear models which allow for “outlier
-diagnostics”.
+* complexity analysis, default as number of genes / number of UMIs. The pipeline detects abnormally low complexity genes, ie those with lower number of unique genes expected given the number of UMIs captured. Usually, this is either poor quality cells or extreme cells like RBCs.
 
-After filtering, you should re-process the data.
+* data driven mitochondrial cutoffs: based on the distribtuion of mitochondrial gene content per cell, learn an upper cutoff. It uses median + (median absolute deviation * 2.5) by default.
+
+* data driven nUMI cutoff: based on the distribtuion of UMIs per cell, learn an lower cutoff. It uses median - (median absolute deviation * 2.5) by default.
 
 See `?FerrenaSCRNAseq::automatedfiltering()`
 
-    ### read in and pre-process
-    #read in object
-    rawh5 = '/path/to/h5/file/from/cellranger'
-    samp = 'sample_label'
-    sobj <- CreateSeuratObject(   Read10X_h5(rawh5), min.cells= 3, project = samp)
 
-    #mito content, add to metadata
+    ### quick run ###
+    # sobj is a seurat object
+    
+    # identify outliers
+    af <- autofilter(sobj)
+
+    # get high quality cells
+    goodcells <- af$cellstatus[af$cellstatus$filteredout==F,"barcodes"]
+
+    # filter the seurat object for the high quality cells
+    sobj <- sobj[,goodcells]
+    
+    
+I recommend doing this as a first step, before other filtering.
+After removal of poor quality outlier cells, you should then do (or re-do) any processing: HVG detection, PCA, graph building, clustering etc.
+    
+    
+## View details of filtering
+
+    ### calculate % mito content and % hemoglobin
+    # good to do it beforehand, but the pipeline does it internally if you don't
+    
+    #percent.mito
     mito.features <- grep(pattern = "^mt-", x = rownames(x = sobj), value = TRUE, ignore.case = T)
     sobj[["percent.mito"]] <- Seurat::PercentageFeatureSet(sobj, features = mito.features)
-
-
-    #normalize and cluster
-    suppressWarnings(sobj <- Seurat::SCTransform(sobj, verbose = T))
-
-    sobj <- Seurat::RunPCA(object = sobj, verbose = F)
-
-    sobj <- Seurat::FindNeighbors(object = sobj, dims = 1:20, verbose = F)
-    sobj <- Seurat::FindClusters(object = sobj, resolution = 0.1, verbose = F, algorithm = 4)
-
-    sobj <- RunUMAP(sobj, dims = 1:20)
-
-
-    ### run auto filter ###
-
-    # sobj is a suerat object
-    # clusters refers to a column in the seurat@meta.data - here, we use the clsutering computed above.
-    # iterative mito filter (cell-wise) is not as good as identifying and removing the mito cluster.
-    # see ?FerrenaSCRNAseq::automatedfiltering
-
-    reportlist <- FerrenaSCRNAseq::automatedfiltering(sobj, clusters = 'SCT_snn_res.0.1',
-    iterativefilter.mito = F)
-
-
-
-    #add autofilter results to metadata
-    autofilterres <- reportlist[[1]]
-    sobj$filteredout <- autofilterres$filteredout
-    sobj$filterreason <- autofilterres$filterreason
-
-
-    #make an output dir for the report
-    outputdir = '.'
-    dir.create( paste0(outputdir) )
-    dir.create( paste0(outputdir, '/qc') )
-
-    #plot autofilter results
-    pdf(  paste0(outputdir, '/qc/autofilter.pdf'), 7,7)
-    print( DimPlot(sobj, label = T) )
-
-
-    print( FeaturePlot(sobj, c('nCount_RNA', 'nFeature_RNA', 'percent.mito'), order = T) + 
-    DimPlot(sobj, group.by = 'filteredout')
-    )
-
-    print(reportlist)
-    dev.off()
-
-    #save autofilter output
-    saveRDS( reportlist, paste0(outputdir, '/qc/reportlist-autofilter.rds') )
-
-    #filter
-    goodcells <- autofilterres[autofilterres$filteredout == 'No', 'barcodes']
+    
+    #percent.hemoglobin, by default checks all mouse/human hemoglobin genes
+    sobj[["percent.hemoglobin"]] <- FerrenaSCRNAseq::calculate_percent.hemoglobin(sobj)
+    
+    
+    #detect the outliers
+    af <- autofilter(sobj)
+    
+    #see the classification as outlier or not for each cell, 
+    # it also shows the reason each cell may have been called an outlier
+    head( af$cellstatus )
+    
+    # check the complexity filtering step
+    af$globalfilter.complexity
+    
+    #check lower lib size cutoff step
+    # with the baseline UMI cutoff, this may not remove many or even remove none at all
+    af$globalfilter.libsize
+    
+    # check the percent mito step
+    af$globalfilter.mito
+    
+    #filter out the outliers
+    goodcells <- af$cellstatus[af$cellstatus$filteredout==F,"barcodes"]
     sobj <- sobj[,goodcells]
 
-    #reprocess
-    #normalize and cluster
-    suppressWarnings(sobj <- Seurat::SCTransform(sobj, verbose = T))
 
-    sobj <- Seurat::RunPCA(object = sobj, verbose = F)
-
-    sobj <- Seurat::FindNeighbors(object = sobj, dims = 1:20, verbose = F)
-    sobj <- Seurat::FindClusters(object = sobj, resolution = 0.1, verbose = F, algorithm = 4)
-
-    sobj <- RunUMAP(sobj, dims = 1:20)
 
 ## DoubletFinder Wrapper for automated doublet calling
 
@@ -134,5 +106,36 @@ see `?FerrenaSCRNAseq::dratedf` and
 
 This table is accurate as of 2022 Feb 09.
 
-    #use doublet filtering
-    dfdf <- FerrenaSCRNAseq::doubletfinderwrapper(sobj, clusters = 'SCT_snn_res.0.1')
+
+    ## preprocess with SCT and cluster ##
+    suppressWarnings(sobj <- Seurat::SCTransform(sobj, verbose = T, method="glmGamPoi"))
+
+    sobj <- Seurat::RunPCA(object = sobj, verbose = F)
+    sobj <- Seurat::FindNeighbors(object = sobj, dims = 1:30, verbose = F)
+    sobj <- Seurat::FindClusters(object = sobj, resolution = 0.1, verbose = F, algorithm = 1)
+
+
+    # get the doubletfinder dataframe
+    # num.cores, parallelization is now supported by DF
+    dfdf <- doubletfinderwrapper(sobj, #autofilterres = af,
+                                        num.cores = 5)
+                                        
+                                        
+    # alternatively, you can also pass the autofilter result, 
+    # it will then return an updated autofilter result list including the doubletfinder results
+    af <- doubletfinderwrapper(sobj, autofilterres = af,
+                           num.cores = 5)
+                           
+
+    # filter out doublets
+    # from doubletfinder data.frame, if autofilter res was not passed above
+    singlets <- dfdf[dfdf$DoubletFinderClassification=='Singlet','cells']
+    sobj <- sobj[,singlets]
+    
+    # or, filter using updated autofilter result object
+    goodcells <- af$cellstatus[af$cellstatus$filteredout==F,"barcodes"]
+    sobj <- sobj[,goodcells]
+    
+    
+
+After removal of doublets, I recommend re-processing the data (HVG detection, PCA, graph, clustering).
