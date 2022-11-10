@@ -220,7 +220,7 @@ pseudobulk <- function(obj, grouping_colname_in_md, metadata, rawh5_path, assay,
       md_ct <- md[md[,grouping_colname_in_md]==ct,]
 
       #subset mat
-      mat_ct <- mat[,match(rownames(md_ct), colnames(mat))]
+      mat_ct <- mat[,match(rownames(md_ct), colnames(mat)), drop=F]
 
       df <- data.frame(Matrix::rowSums(mat_ct))
       colnames(df) <- ct
@@ -286,3 +286,50 @@ calculate_percent.hemoglobin <- function(sobj, hemoglobin.features){
 
 }
 
+
+
+
+
+### try to collapse clusters in seurat object with some cutoff of correlation?
+# what's the reference for this?
+# "extend" the collapsing?
+# A may be cor with B, and B with C, but A not with C...
+# collapse A, B and C?
+
+# #collapse clusters: make cor matrix
+# avgs <- AverageExpression(sobj, assays = 'SCT', return.seurat = F, slot = 'data')$SCT
+#
+# #pairwise correlation
+# cormat <- cor(as.matrix(avgs))
+#
+# #collapse them:
+# mask <- cormat>correlation_threshold_collapse_hires_clusters
+#
+# #for each cluster, record which ones have cor > threshold
+# clusts <- colnames(mask)
+# clusts_to_collapse <- lapply(clusts, function(clust){
+#
+#   #get correlations of this cluster
+#   maskcol <- mask[,clust]
+#
+#
+#   #get any clusts above thres
+#   if( any(maskcol) == T ){
+#     return( names(maskcol[maskcol==T]) )
+#   } else{
+#     return()
+#   }
+#
+# })
+# names(clusts_to_collapse) <- clusts
+#
+#
+# #check if list elements are null; if so they have no clusters above thres, so drop them
+# clusts_to_collapse <- clusts_to_collapse[ sapply(clusts_to_collapse, function(x){length(x)>1}) ]
+#
+#
+# # if there are clusters to collapse, we should get them...
+# identdf <- data.frame(orig = names(clusts_to_collapse),
+#                       collapse = sapply(clusts_to_collapse,function(x){paste(x,collapse = '_')}) )
+#
+# identdf
