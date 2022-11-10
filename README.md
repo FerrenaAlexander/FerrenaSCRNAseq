@@ -26,11 +26,11 @@ The core function is called `FerrenaSCRNAseq::autofilter()`. This function selec
 
 * baseline cutoffs of minimum number of UMIs (default is 1000); minimum number of genes (default is 200); maximum percent mitochondrial content (max 25%); max percent hemoglobin content (max 25%)
 
-* complexity analysis, default as number of genes / number of UMIs. The pipeline detects abnormally low complexity genes, ie those with lower number of unique genes expected given the number of UMIs captured. Usually, this is either poor quality cells or extreme cells like RBCs.
+* complexity analysis, defined as number of genes / number of UMIs. The pipeline detects cells with abnormally low complexity, ie those with lower number of unique genes expected given the number of UMIs captured. Usually, this is either poor quality cells or extreme cells like RBCs.
 
 * data driven mitochondrial cutoffs: based on the distribtuion of mitochondrial gene content per cell, learn an upper cutoff. It uses median + (median absolute deviation * 2.5) by default.
 
-* data driven nUMI cutoff: based on the distribtuion of UMIs per cell, learn an lower cutoff. It uses median - (median absolute deviation * 2.5) by default.
+* data driven nUMI cutoff: based on the distribtuion of UMIs per cell, learn a lower cutoff. It uses median - (median absolute deviation * 2.5) by default.
 
 See `?FerrenaSCRNAseq::automatedfiltering()`
 
