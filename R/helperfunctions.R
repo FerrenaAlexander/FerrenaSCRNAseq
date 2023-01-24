@@ -290,6 +290,63 @@ calculate_percent.hemoglobin <- function(sobj, hemoglobin.features){
 
 
 
+#' Make a table that can print to a pdf page
+#'
+#' @param tabledf data.frame to put as table on pdf
+#' @param title title for table
+#' @param titlesize title font size, default is 15
+#' @param padding whitespace between title and table, default=1
+#'
+#' @return
+#' @export
+#'
+#' @examples
+pdftable <- function(tabledf, title, titlesize, padding){
+
+  if(missing(titlesize)){titlesize <- 15}
+  if(missing(padding)){padding <- 1}
+
+
+  table <- gridExtra::tableGrob(tabledf)
+
+
+  if(missing(title)){
+
+    grid::grid.newpage()
+
+    return(grid::grid.draw(table))
+
+  } else{
+
+
+    #set up title and table
+    title <- grid::textGrob(label = title,
+                            gp=gpar(fontsize=titlesize) )
+
+
+    #add padding and table
+    # https://stackoverflow.com/a/33738678
+    padding <- unit(padding,"line")
+
+    table <- gtable::gtable_add_rows(
+      table, heights = grid::grobHeight(title) + padding, pos = 0
+    )
+    table <- gtable::gtable_add_grob(
+      table, list(title),
+      t = 1, l = 1, r = ncol(table)
+    )
+
+    grid::grid.newpage()
+
+    return(grid::grid.draw(table))
+
+  }
+}
+
+
+
+
+
 ### try to collapse clusters in seurat object with some cutoff of correlation?
 # what's the reference for this?
 # "extend" the collapsing?
