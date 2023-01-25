@@ -249,14 +249,14 @@ autofilter <- function(
     md <- cbind(md, out_decision)
     md$CooksDistance_lm <- md$cd_lm
 
-    cp_lm_cd <- ggplot2::ggplot(md, ggplot2::aes(log(nCount_RNA), log(nFeature_RNA), col = CooksDistance_lm)) +
-      ggplot2::geom_point(alpha = 0.7, size = 0.7)+
+    cp_lm_cd <- ggplot2::ggplot(md, ggplot2::aes(log(nCount_RNA), log(nFeature_RNA))) +
+      ggplot2::geom_point(alpha = 0.7, size = 0.7, ggplot2::aes(col = CooksDistance_lm))+
       ggplot2::geom_smooth(method = 'lm')+
       ggplot2::scale_color_gradient2(high = 'red', low = 'blue', mid = 'grey'  )+
       ggplot2::labs(caption = paste0('Cutoff = cooks > 4 / N, here = ', round(4/nrow(md), 5) ) )
 
-    cp_ls_rd <- ggplot2::ggplot(md, ggplot2::aes(log(nCount_RNA), log(nFeature_RNA), col = resid_loess)) +
-      ggplot2::geom_point(alpha = 0.7, size = 0.7)+
+    cp_ls_rd <- ggplot2::ggplot(md, ggplot2::aes(log(nCount_RNA), log(nFeature_RNA))) +
+      ggplot2::geom_point(alpha = 0.7, size = 0.7, ggplot2::aes(col = resid_loess))+
       ggplot2::geom_smooth(method = 'loess')+
       ggplot2::scale_color_gradient2(mid = 'grey', low = 'red', high = 'blue')+
       ggplot2::labs(caption = paste('Cutoff = loess residuals < ', loess_negative_residual_threshold ))
