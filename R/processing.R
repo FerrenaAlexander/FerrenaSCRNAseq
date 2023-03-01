@@ -667,7 +667,7 @@ doubletfinderwrapper <- function(seuratobject, clusters, autofilterres, num.core
 # sobj <- Seurat::FindNeighbors(object = sobj, dims = 1:30, verbose = F)
 # sobj <- Seurat::FindClusters(object = sobj, resolution = 0.1, verbose = F, algorithm = 1)
 #
-# sobj <- RunUMAP(sobj, dims = 1:30)
+# sobj <- Seurat::RunUMAP(sobj, dims = 1:30)
 #
 # # get the doubletfinder  dataframe
 # dfdf <- doubletfinderwrapper(sobj, #autofilterres = af,
