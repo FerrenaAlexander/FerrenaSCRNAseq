@@ -1,0 +1,6144 @@
+---
+title: "10X analysis - clustering and integration"
+output: 
+  html_document:
+    keep_md: false
+    toc: true
+    toc_float: true
+    toc_depth: 5
+    number_sections: true
+    df_print: kable
+    code_folding: hide
+params:
+  datadir: NULL
+  outdir: NULL
+  use_labeltransfer: NULL
+  refdatapath: NULL
+  m_reference: NULL
+  pseudobulk_metadata: NULL
+  comps: NULL
+  min_num_UMI: 500
+  min_num_Feature: 200
+  max_perc_mito: 25
+  max_perc_hemoglobin: 25
+  autofilter_complexity: TRUE
+  autofilter_mito: TRUE
+  autofilter_nUMI: TRUE
+  autofilter_medianabsolutedev_threshold: 3
+  autofilter_loess_negative_residual_threshold: -5
+  doubletFinder: TRUE
+  pcs_indi: 30
+  res_indi: 0.5
+  pcs_int: 30
+  res_int: 0.5
+  risc_reference: NULL
+  de.test.use: NULL
+  crossconditionDE_padj_thres: NULL
+  crossconditionDE_lfc_thres: NULL
+  pathway_padj_thres: 0.1
+  species: 'Homo sapiens'
+  workernum: 1
+  force_redo: FALSE
+date: "`r Sys.Date()`"
+author: Alexander Ferrena, lab of Dr. Deyou Zheng (PhD)
+---
+
+
+
+
+
+```{r setup, include=FALSE}
+
+#rmarkdown tips
+# https://bookdown.org/yihui/rmarkdown/basics.html
+
+
+### for code folding, put this under html options above and set echo = T below:
+# output: 
+#   html_document:
+#     code_folding: hide
+
+
+# make sections with R code
+# https://stackoverflow.com/questions/36674824/use-loop-to-generate-section-of-text-in-rmarkdown 
+
+knitr::opts_chunk$set(echo = F, warning=FALSE, message=FALSE, results = 'hold', fig.width = 7, fig.height = 7)
+
+#set whole project directory (use this instead of setwd() in rmd)
+# knitr::opts_knit$set(root.dir = rprojroot::find_rstudio_root_file())
+#hopefully commenting just works with cwd
+
+#set do not stop knitting even with errors; obviously dangerous, for testing only
+knitr::opts_chunk$set(
+  error = T # if true, do not interrupt in case of errors
+)
+
+
+#set timer
+
+timestart = proc.time()
+
+
+#set memory limit
+# this is for parallel via future (for markers)
+# some seurat functions also rely on this under the hood...
+# pipeline may fail if this is not set
+
+
+# options(future.globals.maxSize = 850*1024^2) # 850 MB
+# options(future.globals.maxSize = 850*1024^2) # 1 GB
+#options(future.globals.maxSize = 8000 * 1024^2) # 8 GB
+
+#needs bigger for d02? just test... 
+# yes it failed, try 15gb?
+
+options(future.globals.maxSize = 15000 * 1024^2) # 15 GB
+
+
+
+# set seed
+set.seed(2022)
+
+```
+
+
+
+
+
+
+
+```{r set_input_output_and_params}
+
+
+### for testing and / or manually setting things only;
+# keep commented otherwise
+# rm(sobj)
+# params <- list(
+#   datadir = '~/Dropbox/Result_from_Alex/deyoudata/stromadata_Jan2022/data/cellranger/',
+#   outdir = '~/Dropbox/Result_from_Alex/deyoudata/stromadata_Jan2022/outs/clusterint_integration_pipeline/',
+#   
+#   use_labeltransfer = T,
+#   refdatapath = '~/Dropbox/Result_from_Alex/deyoudata/stromadata_Jan2022/ref/barwayno/atlas.rds',
+#   m_reference = '~/Dropbox/Result_from_Alex/deyoudata/stromadata_Jan2022/ref/barwayno/m_ref.rds',
+#   
+#   pseudobulk_metadata = '~/Dropbox/Result_from_Alex/deyoudata/stromadata_Jan2022/data/metadata/smallmd.csv',
+#   comps = '~/Dropbox/Result_from_Alex/deyoudata/stromadata_Jan2022/data/metadata/smallcomps.csv',
+#   
+#   min_num_UMI = 500,
+#   min_num_Feature = 200,
+#   max_perc_mito = 25,
+#   max_perc_hemoglobin = 25,
+#   autofilter_complexity = TRUE,
+#   autofilter_mito = TRUE,
+#   autofilter_nUMI = TRUE,
+#   autofilter_medianabsolutedev_threshold = 3,
+#   autofilter_loess_negative_residual_threshold = -5,
+#   
+#   doubletFinder = F,
+#   
+#   
+#   pcs_indi = 30,
+#   res_indi = 0.5,
+#   pcs_int = 30,
+#   res_int = 0.5,
+#   risc_reference = NULL,
+#   de.test.use = 'pseudobulk_edgeR',
+#   crossconditionDE_padj_thres = NULL,
+#   crossconditionDE_lfc_thres = NULL,
+#   pathway_padj_thres = 0.1,
+#   species = 'Mus musculus',
+#   workernum = 4,
+#   force_redo = F
+# )
+
+
+
+#set verbosity --> deprecated, keep false
+verbose=F
+
+
+## key params, setting paths
+datadir <- params$datadir
+
+if(is.null(datadir)){stop('Please set datadir, path to spaceranger results')}
+
+# set output dir
+outdir <- params$outdir
+if(is.null(outdir)){stop('Please set outdir, output folder')}
+
+dir.create(outdir, recursive = T)
+
+#set up output dir for individual samples
+outdir_indi <- paste0(outdir, '/individualsample_analysis')
+
+dir.create(outdir_indi)
+
+#prep a dir for int results
+outdir_int <- paste0(outdir, '/multisample_integration/') 
+
+dir.create(outdir_int)
+
+
+
+
+#set path to reference data for label transfer.
+
+
+use_labeltransfer <- params$use_labeltransfer
+if(is.null(use_labeltransfer)){stop('Please set use_labeltransfer to T/F; if T, please also provide paths refdatapath and m_reference')}
+
+if(use_labeltransfer == T){
+  
+  refdatapath <- params$refdatapath
+  if(is.null(refdatapath)){stop('Please set refdatapath, path to reference scRNAseq Seurat object .rds file with "Celltype" in meta.data')}
+  
+  
+  
+  # ref markers
+  m_reference <- params$m_reference
+  
+  if(is.null(m_reference)){stop('Please set m_reference, path to FindAllMarkers result from reference celltypes, saved as .rds file')}
+  
+} else{
+  refdatapath <- NULL
+  m_reference <- NULL
+}
+
+
+
+
+#de test use
+de.test.use <- params$de.test.use
+if(is.null(de.test.use)){stop('Please set "de.test.use" as either "pseudobulk_edgeR" or "wilcox"')}
+
+
+## analysis parameters: dimreduction and clustering hyperparameters
+
+# just use defaults in params since its easier, except for pwaycats
+
+pwaycats <- c("HALLMARK", "GO_BP", "GO_MF", "GO_CC", "CP_REACTOME", "CP_KEGG")
+
+
+#get risc reference
+risc_reference <- params$risc_reference
+
+
+#autofilter parameters
+min_num_UMI = params$min_num_UMI
+min_num_Feature = params$min_num_Feature
+max_perc_mito = params$max_perc_mito
+max_perc_hemoglobin = params$max_perc_hemoglobin
+autofilter_complexity = params$autofilter_complexity
+autofilter_mito = params$autofilter_mito
+autofilter_nUMI = params$autofilter_nUMI
+
+autofilter_medianabsolutedev_threshold = params$autofilter_medianabsolutedev_threshold
+autofilter_loess_negative_residual_threshold = params$autofilter_loess_negative_residual_threshold
+
+doubletFinder = params$doubletFinder
+
+
+pcs_indi <- params$pcs_indi
+res_indi <- params$res_indi
+pcs_int <- params$pcs_int
+res_int <- params$res_int
+
+
+#for these, defaults will be null, then set to lenient if pseudobulk and strict if wilcox
+
+crossconditionDE_padj_thres <- params$crossconditionDE_padj_thres
+crossconditionDE_lfc_thres <- params$crossconditionDE_lfc_thres
+
+
+if(de.test.use == 'pseudobulk_edgeR'){
+  
+  if(is.null(crossconditionDE_padj_thres)){
+    crossconditionDE_padj_thres <- 0.1
+  }
+  
+  if(is.null(crossconditionDE_lfc_thres)){
+    crossconditionDE_lfc_thres <- 0
+  }
+  
+  
+}
+
+if(de.test.use == 'wilcox'){
+  
+  if(is.null(crossconditionDE_padj_thres)){
+    crossconditionDE_padj_thres <- 0.05
+  }
+  
+  if(is.null(crossconditionDE_lfc_thres)){
+    crossconditionDE_lfc_thres <- 0.25
+  }
+  
+  
+}
+
+
+pathway_padj_thres <- params$pathway_padj_thres
+
+
+# pwaycats: NULL
+species <- params$species
+
+
+
+## parallelization
+
+workernum <- params$workernum
+
+#redo / overwrite
+# force_redo <- params$force_redo
+force_redo = T
+
+#get params, will reget and parse after saving
+pseudobulk_metadata <- params$pseudobulk_metadata
+comps <- params$comps
+
+
+# ## save the parameter choices
+# paramsave <- lapply(1:length(params), function(i){
+#   var <- names(params)[i]
+#   
+#   get(var)
+# })
+# 
+# names(paramsave) <- names(params)
+# 
+# 
+# paramsave <- t(data.frame(paramsave))
+# 
+# paramsave <- cbind(rownames(paramsave), paramsave)
+# rownames(paramsave) <- NULL
+
+
+
+
+## defining DE comparisons and sample conditions with metadata
+
+#do this below saving params, since we overwrite these names
+
+#metadata
+pseudobulk_metadata <- params$pseudobulk_metadata
+if(is.null(pseudobulk_metadata)){stop('Please set pseudobulk_metadata, path to csv file with Sample column and Condition column')}
+
+#parse pseudobulk
+# read.csv...
+pseudobulk_metadata <- read.csv(pseudobulk_metadata)
+
+#parse factor
+pseudobulk_metadata$Condition <- factor(pseudobulk_metadata$Condition,
+                                        levels = unique(pseudobulk_metadata$Condition))
+
+#add codes, optional
+
+if(!('Code' %in% colnames(pseudobulk_metadata))){
+  pseudobulk_metadata$Code <- paste0(pseudobulk_metadata$Condition, '_', pseudobulk_metadata$Sample)
+}
+
+
+
+
+#comparisons
+comps <- params$comps
+
+if(!is.null(comps)){ comps <- read.csv(comps) }
+if(is.null(comps)){
+  
+  
+  if( length(levels(pseudobulk_metadata$Condition)) > 2 ){
+    
+    warning('"comps" data.frame not provided, will try to guess from pseudobulk_metadata')
+    comps <- data.frame(c1 = levels(pseudobulk_metadata$Condition)[1],
+                        c2 = levels(pseudobulk_metadata$Condition)[2])
+    
+  } else{
+    
+    stop('Please set comps, path to csv file c1 and c2 column defining comparisons of conditions to use')
+    
+  }
+  
+  
+}
+
+
+
+# 
+# #save params as a data.frame
+# pl <- list(datadir = datadir,
+#            outdir = outdir,
+#            use_labeltransfer = use_labeltransfer,
+#            refdatapath = refdatapath,
+#            m_reference = m_reference,
+#            pseudobulk_metadata = params$pseudobulk_metadata,
+#            comps = params$comps,
+#            spotclean = spotclean,
+#            pcs_indi = pcs_indi,
+#            res_indi = res_indi,
+#            pcs_int = pcs_int,
+#            res_int = res_int,
+#            de.test.use = de.test.use,
+#            crossconditionDE_padj_thres = crossconditionDE_padj_thres,
+#            crossconditionDE_lfc_thres = crossconditionDE_lfc_thres,
+#            pathway_padj_thres = pathway_padj_thres,
+#            species = species,
+#            workernum = workernum)
+# 
+# pldf <- data.frame(parameter = names(pl),
+#                    value = unlist(pl))
+# 
+# #write it out
+# write.csv(pldf, paste0(outdir, '/pipeline_parameters.csv'), quote = F, row.names = F)
+
+
+```
+
+
+
+
+
+# Individual sample processing and analysis
+
+First, we preprocess and analyze each individual sample. This will go through the following steps for each sample:
+
+* Preprocessing: Normalize and pre-process with the Seurat SingleCellTransform (SCT) pipeline
+* Dimension reduction and clustering: Principal component analysis, graph construction, clustering, and visualization via UMAP to discover clusters of spots in each sample
+* Marker analysis: using the Wilcoxon test for differential expression, find the unique marker genes of each cluster
+* Label transfer: from a reference single-cell dataset, quantify how much each "spot" in the spatial data resembles a known cell type
+
+
+After the analysis of individual samples, we will do an integrated analysis.
+
+
+
+
+```{r indi_loadin_processing }
+
+### load packages, set seed
+
+library(tidyverse)
+library(patchwork)  # combine plots
+library(RISC)
+library(Seurat)
+library(FerrenaSCRNAseq)
+library(DoubletFinder)
+
+library(future)
+library(parallel)
+library(foreach)
+
+library(glmGamPoi)  # for faster SCT
+library(ComplexHeatmap) # for heatmaps
+library(ggdendro)       #for clustering dendrograms
+
+library(ggridges) # qc ridgeplots
+
+library(edgeR)
+
+library(msigdbr)          #get pathways (cross species) from msigdb
+
+library(hdf5r) # HARD TO INSTALL: installed thru mamba
+library(ggalluvial) # part of alluvial plot
+library(ggfittext) # part of alluvial plot
+library(ggrepel) # part of alluvial plot
+
+
+set.seed(2022)
+
+
+#```
+
+
+
+
+# ```{r prep_my_fxns}
+
+## Prep custom functions
+
+# pseudobulk with pseudoreps
+# alluvial plot
+
+
+
+#pseudobulk pseudoreplicates funcion
+# unstable, only tested with seurat objects
+# kind of hacky, leaves out some cells
+
+pseudobulk_with_pseudoreplicates <- function(obj, grouping_colname_in_md, metadata, rawh5_path, assay, slot,
+                                             num_pseudoreplicates){
+  
+  if(missing(assay)){assay = 'RNA'}
+  if(missing(slot)){slot = 'counts'}
+  
+  require(Seurat)
+  require(Matrix)
+  
+  #if rawh5_path is given, read in from raw data for all genes
+  # if not, just use the seurat object as is
+  
+  #if grouping_colname_in_md is given, pseudobulk at celltype level
+  # if not, pseudobulk whole object
+  
+  
+  #get matrix and md
+  
+  
+  if( any(grepl('Seurat', is(obj), ignore.case = T))  ){
+    
+    message('Seurat object detected')
+    #md from seurat obj
+    sobj <- obj
+    md <- sobj@meta.data
+    
+    #mat: read in H5, or use
+    if( !missing(rawh5_path) ){
+      
+      message('Reading raw matrix from:\n', rawh5_path)
+      
+      #read in raw mat
+      mat  <- Read10X_h5(rawh5)
+      
+      mat <- mat[, match(colnames(sobj), colnames(mat)) ]
+      
+    } else{
+      
+      message('Using matrix from Seurat object:',
+              '\n - Assay = ', assay,
+              '\n - Slot = ', slot)
+      
+      mat <- Seurat::GetAssayData(sobj, assay=assay, slot=slot)
+    }
+  } else{
+    message('Assuming input is matrix-like')
+    
+    mat <- obj
+    
+    if(!missing(grouping_colname_in_md)){
+      if(missing(metadata)){stop('Please pass metadata dataframe to "metadata" argument')} else{md = metadata}
+    }
+    
+  }
+  
+  
+  
+  
+  #pseudobulk (at whole or celltype level)
+  
+  if( !missing(grouping_colname_in_md) ){
+    message('For grouping, using metadata column: "', grouping_colname_in_md, '"')
+    
+    #get celltypes by order of number hi-->lo
+    if( is.factor(md[,grouping_colname_in_md]) ){cts <- levels(md[,grouping_colname_in_md])} else{
+      cts <- names( sort(table(as.vector(md[,grouping_colname_in_md])), decreasing = T) )
+    }
+    
+    #for each cell type, pseudobulk
+    dflist <- lapply(cts, function(ct){
+      
+      # message(ct)
+      
+      
+      if( table(md[,grouping_colname_in_md])[ct] < 21){
+        warning('Cluster ', ct, ' has too few cells, less than 21, so skipping')
+        return()
+      }
+      
+      
+      #subset md
+      md_ct <- md[md[,grouping_colname_in_md]==ct,]
+      
+      
+      
+      
+      #subset mat
+      mat_ct <- mat[,match(rownames(md_ct), colnames(mat))]
+      
+      
+      ### pseudoreplicates ###
+      
+      
+      
+      #pseudoreplicates
+      # first grab the cell names
+      barcodes_to_sample_from <- colnames(mat_ct)
+      sampsize <- round(length(barcodes_to_sample_from) / 3) - 1
+      
+      #sample the barcodes
+      pseudorep_barcode_list <- lapply( c(1:num_pseudoreplicates), function(i) {
+        
+        #  message(i)
+        
+        barcodes_sampled <- sample(barcodes_to_sample_from, size = sampsize, replace = F)
+        barcodes_to_sample_from <<- barcodes_to_sample_from[!(barcodes_to_sample_from %in% barcodes_sampled)]
+        barcodes_sampled
+      })
+      
+      
+      
+      # using the barcode, sample the matrix and make pseudobulked pseudoreps
+      
+      df_sublist <- lapply( c(1:num_pseudoreplicates) , function(i){
+        barcodes_sampled <- pseudorep_barcode_list[[i]]
+        mat_ct_sub <- mat_ct[,colnames(mat_ct) %in% barcodes_sampled]
+        df <- data.frame(Matrix::rowSums(mat_ct_sub))
+        colnames(df) <- paste0(ct, '_', i)
+        df
+      })
+      df <- dplyr::bind_cols(df_sublist)
+      
+      
+      
+      
+    })
+    
+    df <- dplyr::bind_cols(dflist)
+    
+  } else{
+    message('Groupings not provided, will pseudobulk whole dataset')
+    
+    
+    df <- data.frame(Matrix::rowSums(mat))
+    colnames(df) <- NULL
+    
+  }
+  
+  
+  df
+  
+  
+}
+
+
+
+
+
+## read pseudobulk function
+
+
+#' Pseudobulk Seurat objects at whole sample or celltype level
+#'
+#' Pseudobulking is performed adding up gene expression values for each cell, for either cell types or whole sample.
+#'
+#' @param obj - seurat object, or a matrix
+#' @param grouping_colname_in_md - optional, a string, the column name of `sobj@meta.data` (if obj is a seurat object) or metadata (if using matrix and metadata input) to use as "cell types" or any other grouping for pseudobulking at group level. if not provided, pseudobulk the entire matrix. default, not used.
+#' @param metadata - data.frame with cell metadata, similar to `seuratobject@meta.data`. pass this only if
+#' @param rawh5_path - optional, a string, the path to a rawH5 file, if provided will use the raw matrix subsetted by cells in sobj; if not will just pseudobulk the seurat object. useful if some filtering was applied to seurat object but you want to pseudobulk the whole matrix without that filtering, but with only using cells in seurat object. Default is not to use this.
+#' @param assay - optional, a string, the name of the Seurat object assay to pull matrix from if rawh5_path is not provided. Default is "RNA" assay
+#' @param slot - optional, a string, the name of the Seurat object slot within the designated object assay to pull matrix from if rawh5_path is not provided. Default is "counts" slot
+#'
+#' @return a data.frame. if grouping_colname_in_md is provided, each celltype will have a pseudobulked column, if not the data.frame will just be one column for the whole sample matrix.
+#' @export
+#'
+#' @examples
+pseudobulk <- function(obj, grouping_colname_in_md, metadata, rawh5_path, assay, slot, min_cells){
+  
+  if(missing(assay)){assay = 'RNA'}
+  if(missing(slot)){slot = 'counts'}
+  if(missing(min_cells)){min_cells <- 7}
+  
+  require(Seurat)
+  require(Matrix)
+  
+  #if rawh5_path is given, read in from raw data for all genes
+  # if not, just use the seurat object as is
+  
+  #if grouping_colname_in_md is given, pseudobulk at celltype level
+  # if not, pseudobulk whole object
+  
+  
+  #get matrix and md
+  
+  
+  if( any(grepl('Seurat', is(obj), ignore.case = T))  ){
+    
+    message('Seurat object detected')
+    #md from seurat obj
+    sobj <- obj
+    md <- sobj@meta.data
+    
+    #mat: read in H5, or use
+    if( !missing(rawh5_path) ){
+      
+      message('Reading raw matrix from:\n', rawh5_path)
+      
+      #read in raw mat
+      mat  <- Read10X_h5(rawh5)
+      
+      mat <- mat[, match(colnames(sobj), colnames(mat)) ]
+      
+    } else{
+      
+      message('Using matrix from Seurat object:',
+              '\n - Assay = ', assay,
+              '\n - Slot = ', slot)
+      
+      mat <- Seurat::GetAssayData(sobj, assay=assay, slot=slot)
+    }
+  } else{
+    message('Assuming input is matrix-like')
+    
+    mat <- obj
+    
+    if(!missing(grouping_colname_in_md)){
+      if(missing(metadata)){stop('Please pass metadata dataframe to "metadata" argument')} else{md = metadata}
+    }
+    
+  }
+  
+  
+  
+  
+  #pseudobulk (at whole or celltype level)
+  
+  if( !missing(grouping_colname_in_md) ){
+    message('For grouping, using metadata column: "', grouping_colname_in_md, '"')
+    
+    #get celltypes by order of number hi-->lo
+    if( is.factor(md[,grouping_colname_in_md]) ){cts <- levels(md[,grouping_colname_in_md])} else{
+      cts <- names( sort(table(as.vector(md[,grouping_colname_in_md])), decreasing = T) )
+    }
+    
+    ## skip if zero cells...
+    cttab <- table(md[,grouping_colname_in_md])
+    cttab <- cttab[cts]
+    cts <- cts[cttab>0]
+    
+    
+    
+    #skip if below min cells
+    ## skip if zero cells...
+    cttab <- table(md[,grouping_colname_in_md])
+    cttab <- cttab[cts]
+    cts <- cts[cttab>min_cells]
+    
+    #for each cell type, pseudobulk
+    dflist <- lapply(cts, function(ct){
+      
+      #subset md
+      md_ct <- md[md[,grouping_colname_in_md]==ct,]
+      
+      #subset mat; drop =F applies if only 1 cell is left...
+      mat_ct <- mat[,match(rownames(md_ct), colnames(mat)), drop=F]
+      
+      df <- data.frame(Matrix::rowSums(mat_ct))
+      colnames(df) <- ct
+      df
+    })
+    
+    df <- dplyr::bind_cols(dflist)
+    
+  } else{
+    message('Groupings not provided, will pseudobulk whole dataset')
+    
+    
+    df <- data.frame(Matrix::rowSums(mat))
+    colnames(df) <- NULL
+    
+  }
+  
+  
+  df
+  
+  
+}
+
+
+
+
+#FerrenaSCRNAseq::alluvialplot()
+
+#' Create an alluvial plot from long categorical data
+#'
+#' Wrapper around ggalluvium package for ggplot based alluvial plot, for quickly making alluvial plot from "long", "raw" categorical data (such as Seurat object meta.data), rather than two-way counts of categories.
+#'
+#'
+#'
+#'
+#'
+#' @param labelsdf data.frame with two columns of raw categorical label: for example, each row is a cell (or other observation), and each column is metadata column 1 and metadata column 2
+#' @param repel T/F, whether to repel the labels, default = T
+#' @param nudge_x numeric, default nudge to the left and right of the repel labels, default 0.2
+#' @param ggfittext T/F - whether to use ggfittext, to try to squeeze or remove tiny stratum labels
+#' @param ...
+#'
+#' @return a ggplot object
+#' @export
+#'
+#' @examples
+#' #labelsdf can look like this, row.names of cells not needed,
+#' # just two columns of categorical data as a data.frame:
+#'                      From      To
+#' AACCCAAGCATGCGA-1    Malignant  2
+#' AAACCCAAGTAGGTTA-1    Malignant  2
+#' AAACCCACAAAGCACG-1   Neutrophil  0
+#' AAACCCACAGCAGTAG-1    Malignant  2
+#' AAACCCACATACCGTA-1    Malignant  2
+alluvialplot <- function(labelsdf, repel, nudge_x, ggfittext, ...){
+  
+  
+  if( missing(repel) ){repel = T}
+  if( missing(nudge_x) ){nudge_x = 0.3}
+  
+  if( missing(ggfittext) ){ggfittext = F}
+  
+  
+  #if levels not set, get them by ordering hi > lo
+  
+  labelsdf2 <- lapply(labelsdf, function(i){
+    if( !is.factor(i) ){
+      factor(i, levels = names(sort(table(i),decreasing = T)))
+    } else{
+      i
+    }
+  })
+  
+  labelsdf <- data.frame(labelsdf2, row.names = rownames(labelsdf))
+  
+  require(ggalluvial)
+  
+  #for ease, we'll set colnames to from and to
+  # colnames(labelsdf)[1:2] <- c('From', 'To')
+  # do this with .data trick now to keep colname!
+  
+  
+  # turn it into a matrix
+  mat <- table(labelsdf[,1], labelsdf[,2])
+  
+  
+  #make the table long format
+  longfreqs <- reshape2::melt(mat)
+  colnames(longfreqs) <- c(colnames(labelsdf)[1:2], 'Freq')
+  
+  
+  #factorize, using input levels or existing levels
+  # inputting levels is mostly about order.
+  
+  
+  longfreqs[,1] <- factor(longfreqs[,1], levels = levels(labelsdf[,1]) )
+  longfreqs[,2] <- factor(longfreqs[,2], levels = levels(labelsdf[,2]))
+  
+  #if both are numerics, it seems to cause an issue, so convert to char vector...
+  # if(is.numeric(longfreqs)[1] & is.numeric(longfreqs)[2])
+  # can't reporduce that problem...
+  
+  
+  if(ggfittext == T){
+    
+    require(ggfittext)
+    ap <- ggplot(longfreqs, aes(y = Freq, axis1=.data[[colnames(longfreqs[1])]], axis2= .data[[colnames(longfreqs[2])]] ))+
+      geom_alluvium(aes(fill= .data[[colnames(longfreqs[1])]] )) +
+      geom_stratum()+
+      #geom_label(stat = "stratum", aes(label = after_stat(stratum)))+
+      ggfittext::geom_fit_text(stat = "stratum",aes(label = after_stat(stratum)), width = 1/4, min.size = 3) +
+      theme_void()
+    
+    
+  } else if(repel==T){
+    
+    require(ggrepel)
+    
+    ap <- ggplot(longfreqs, aes(y = Freq, axis1=.data[[colnames(longfreqs[1])]], axis2= .data[[colnames(longfreqs[2])]] ) )+
+      scale_x_discrete(expand = c(.4, 0))+
+      geom_alluvium( aes(fill= .data[[colnames(longfreqs[1])]] ), width = 1/4 ) +
+      geom_stratum(width = 1/4) +
+      scale_linetype_manual(values = c("blank", "solid")) +
+      
+      ggrepel::geom_label_repel(
+        aes(label = .data[[colnames(longfreqs[1])]] ),
+        stat = "stratum", nudge_x = nudge_x * -1, ...) +
+      
+      ggrepel::geom_label_repel(
+        aes(label = .data[[colnames(longfreqs[2])]]),
+        stat = "stratum", nudge_x = nudge_x, ...) +
+      theme_void()
+    
+  } else{
+    
+    ap <- ggplot(longfreqs, aes(y = Freq, axis1=.data[[colnames(longfreqs[1])]], axis2= .data[[colnames(longfreqs[2])]] ) )+
+      geom_alluvium(aes(fill= .data[[colnames(longfreqs[1])]] )) +
+      geom_stratum()+
+      geom_label(stat = "stratum", aes(label = after_stat(stratum)))+
+      # ggfittext::geom_fit_text(stat = "stratum",aes(label = after_stat(stratum)), width = 1/4, min.size = 3) +
+      theme_void()
+    
+    
+  }
+  ap
+  
+}
+
+
+
+
+```
+
+
+
+
+
+
+# Data Quality Assessment
+
+
+
+
+
+Once sequencing is completed, we get a file that has the barcode and cDNA sequences as reads (a bunch of ATGCs), along with some sequencing quality information. This file is called a “FASTQ” and has the file extension “.fastq”.
+
+The downstream analysis relies on analyzing counts of transcripts for each spot. This means we have to do a few things:
+
+* Alignment: assign each sequence read to the gene it came from.
+
+* Gene demultiplexing: Once the read-pair is aligned to a gene, we count the UMI barcode as a count for that gene. Two reads may come from the same gene, but if they have the same UMI, it means they came from the same transcript, so it only counts at one UMI. This allows us to get around the problem of short-read sequencing inherent to Illumina technology, to count actual transcripts rather than counting reads.
+
+* Spot demultiplexing: Each read also has a spot barcode. Using the barcode, we assign the read to a specific spot.
+
+
+
+These preprocessing steps are performed by the 10x Genomics software called Cellranger.
+
+
+
+Cellranger produces some outputs including web_summary.html files that allow basic exploration of the sample quality. It is good practice to review these files for each sample.
+
+
+
+Downstream analysis, includng clustering and label transfer, works with the output of Cellranger Count. This includes a Gene by cell matrix. Each row is a gene, each column is a cell and each value is the number of UMIs for each gene from each spot; typically, this is ~20K rows x 5K columns.
+
+
+Then, we are ready for the analysis performed in this document. We use the Seurat pipeline in R to analyze this data, which involves the steps detailed in section 1. 
+
+
+
+
+```{r read_in_data}
+
+
+
+
+#set up output dir for individual samples
+outdir_indi <- paste0(outdir, '/individualsample_analysis')
+
+dir.create(outdir_indi)
+
+### read in data ###
+
+#at minimum this requires the image (ie as a tiff file)
+# and the matrix (filtered featuee bc matrix)
+# default seurat 
+
+# samples <- list.files(datadir)
+# names(samples) <- samples #do this so lapply names seurat objects easily
+# samp = samples[1]
+
+
+
+### instead of reading samples like that, use pseudobulk_md for good sample order
+samples <- pseudobulk_metadata$Sample
+names(samples) <- pseudobulk_metadata$Code
+
+
+## read in
+sobjlist <- lapply(samples, function(samp){
+  message('\nReading in ', samp)
+  
+  datafp <- paste0(datadir, '/', samp)
+  # if on hpc, use below
+  # datafp <- paste0(datadir, '/', samp, '/outs/')
+  
+  # for the dl data, we need to find the filepath
+  h5_filename <- grep(pattern = 'filtered_feature_bc_matrix.h5',
+                      list.files(datafp, recursive = T, full.names = T),
+                      value = T)
+  
+  
+  
+  
+  
+  #read in
+  sobj <- CreateSeuratObject(   Read10X_h5(h5_filename), 
+                                min.cells= 3)
+  
+  
+  
+  
+  #make project name the Conditon_Sample
+  md_samp <- pseudobulk_metadata[pseudobulk_metadata$Sample==samp,,drop=F]
+  
+  #make project name the sample
+  sobj@project.name <- md_samp$Code
+  
+  #make orig.ident the code
+  sobj$orig.ident <- md_samp$Code
+  
+  #return seurat obj
+  sobj
+  
+  
+})
+
+
+
+
+```
+
+
+
+
+
+## QC: UMIs, unique genes, mitochondrial and ribosomal genes, and filtering
+
+Here we plot the number of UMIs per cell (nCount_Spatial), and the number of unique genes detected per cell (nFeature_Spatial). If these values are very low, it may indicate a quality issue.
+
+
+
+```{r qc_plots, message='hold', results='hide', message=F, fig.keep='all'}
+
+
+
+
+#add in qc values for mito and hemoglobin
+
+sobjlist <- lapply(sobjlist, function(sobj){
+  #mito content, add to metadata
+  mito.features <- grep(pattern = "^mt-", x = rownames(x = sobj), value = TRUE, ignore.case = T)
+  sobj[["percent.mito"]] <- Seurat::PercentageFeatureSet(sobj, features = mito.features)
+  
+  #hemoglobin content, add to metadata
+  sobj$percent.hemoglobin <- FerrenaSCRNAseq::calculate_percent.hemoglobin(sobj)
+  
+  #calculate phase
+  sobj <- CellCycleScoring(sobj,
+                           s.features = Seurat::cc.genes.updated.2019$s.genes,
+                           g2m.features = Seurat::cc.genes.updated.2019$g2m.genes)
+  
+  sobj
+  
+})
+
+
+
+# make a violin plot showing num UMIs for each cell
+qc_vln_umi <- lapply(sobjlist, function(sobj){
+  
+  
+  VlnPlot(sobj, 'nCount_RNA') + NoLegend() + theme(axis.text.x = element_blank(), axis.title.x = element_blank(), axis.ticks.x.bottom = element_blank())
+  
+  
+})
+
+# make a violin plot showing num genes for each cell
+qc_vln_feature <- lapply(sobjlist, function(sobj){
+  
+  
+  VlnPlot(sobj, 'nFeature_RNA') + NoLegend() +  theme(axis.text.x = element_blank(), axis.title.x = element_blank(), axis.ticks.x.bottom = element_blank())
+  
+  
+})
+
+# make a violin plot showing perc mito for each cell
+qc_vln_mito <- lapply(sobjlist, function(sobj){
+  
+  
+  VlnPlot(sobj, 'percent.mito') + NoLegend() +  theme(axis.text.x = element_blank(), axis.title.x = element_blank(), axis.ticks.x.bottom = element_blank())
+  
+  
+})
+
+# make a violin plot showing perc hemoglobin for each cell
+qc_vln_hemo <- lapply(sobjlist, function(sobj){
+  
+  
+  VlnPlot(sobj, 'percent.hemoglobin') + NoLegend() +  theme(axis.text.x = element_blank(), axis.title.x = element_blank(), axis.ticks.x.bottom = element_blank())
+  
+  
+})
+
+
+
+
+
+
+```
+
+
+
+
+### Number of UMIs per cell
+
+
+Here we plot the number of Unique Molecular Identifiers (UMIs) per cell. Each UMI labels a unique mRNA transcript, so this is a readout of the number of mRNA transcripts per cell.
+
+
+```{r qc_plots_print_nCount}
+
+
+samps <- names(qc_vln_umi)
+
+invisible( #suppress printing plot indices, but allow printing plots
+  
+  lapply(samps, function(samp){
+    combplot <- qc_vln_umi[[samp]]
+    combplot <- combplot + plot_annotation(title = samp, theme = theme(plot.title = element_text(hjust = 0.5)))
+    print(combplot)
+  })
+  
+)
+
+
+
+
+```
+
+
+
+### Number of unique genes per cell
+
+Here we plot the number of unique genes per cell. In Seurat jargon, and in machine learning jargon generally, each gene is called a “feature”.
+
+```{r qc_plots_print_nFeature}
+
+
+samps <- names(qc_vln_feature)
+
+invisible( #suppress printing plot indices, but allow printing plots
+  
+  lapply(samps, function(samp){
+    combplot <- qc_vln_feature[[samp]]
+    combplot <- combplot + plot_annotation(title = samp, theme = theme(plot.title = element_text(hjust = 0.5)))
+    print(combplot)
+  })
+  
+)
+
+```
+
+
+
+### Percent mitochondria gene expression per cell
+
+Here we plot the percent mitochondrial content per cell, which is widely considered a readout of cell quality. Damaged cells with membrane perforations typically "leak" out cell contents from the cytoplasm but mitochondria may be retained, thus damaged cells are often observed to have high levels mitochondrial transcripts.
+
+```{r qc_plots_print_mito}
+
+
+samps <- names(qc_vln_mito)
+
+invisible( #suppress printing plot indices, but allow printing plots
+  
+  lapply(samps, function(samp){
+    combplot <- qc_vln_mito[[samp]]
+    combplot <- combplot + plot_annotation(title = samp, theme = theme(plot.title = element_text(hjust = 0.5)))
+    print(combplot)
+  })
+  
+)
+
+```
+
+
+### Percent hemoglobin gene expression per cell
+
+Here we plot the percent of hemoglobin gene expression content per cell, a marker of red blood cells (RBCs). Typically these are filtered out in the sample prep phase with a RBC lysis solution but may occasionally show up in the data anyway. Large numbers of RBCs can be an indicator of poor sample quality.
+
+```{r qc_plots_print_hemo}
+
+
+samps <- names(qc_vln_hemo)
+
+invisible( #suppress printing plot indices, but allow printing plots
+  
+  lapply(samps, function(samp){
+    combplot <- qc_vln_hemo[[samp]]
+    combplot <- combplot + plot_annotation(title = samp, theme = theme(plot.title = element_text(hjust = 0.5)))
+    print(combplot)
+  })
+  
+)
+
+```
+
+
+### Filter out poor quality cells
+
+Sometimes poor quality cells can occur in the data due to cell membrane damage during sample preparation, etc. This can bias the downstream analysis.
+
+
+```{r filtering_main, message='hold', results='hide', message=F, fig.keep='all'}
+
+
+#here we do most of the filtering 
+
+
+
+rawobjsdir <- paste0(outdir_indi, '/unfiltered_Seurat_objects')
+dir.create(rawobjsdir, recursive = T)
+
+outdir_indi_seuratobjs <- paste0(outdir_indi, '/processed_Seurat_objects')
+dir.create(outdir_indi_seuratobjs, recursive = T)
+
+qcdir <- paste0(outdir_indi, '/qualitycontrol_filtering')
+dir.create(qcdir, recursive = T)
+
+
+#make a temp dir and run one at a time or parallel with foreach...
+## remove seurat objects; save to tmp files instead...
+qctmpdir <- paste0(qcdir, '/qctmpdir/')
+dir.create(qctmpdir, recursive = T)
+sobjlist <- lapply(sobjlist, function(sobj){
+  code <- sobj@project.name
+  tmpsobjfp <- paste0(qctmpdir, '/', code, '.rds')
+  saveRDS(sobj, tmpsobjfp)
+  return(sobj)
+})
+
+
+#clean up env
+
+rm(sobjlist)
+rm(qc_vln_feature, qc_vln_hemo, qc_vln_umi, qc_vln_mito)
+
+invisible(gc(full = T, reset = F, verbose = F))
+
+#actual processing steps
+
+
+#0. read in each sample from temp
+#1. normalize and cluster raw data w/o filter
+#2. apply autofilter
+#3. filter out initial auto filter
+#4. IF DF == T: renormalize, recluster, apply doubletfinder, refilter
+#5. renormalize, recluster with real clustering parameters
+#6. add all filter out annotation to raw sobj
+#7. do some analysis on raw and save it
+#8. save files (raw and filtered/processed)
+#9. return autofilter results
+
+cl <- parallel::makeCluster(workernum)
+doParallel::registerDoParallel(cl)
+
+
+#af_md_list <- lapply(pseudobulk_metadata$Code, function(code){
+af_md_list <- foreach(code = pseudobulk_metadata$Code,
+                      .packages = c('Seurat', 'ggplot2', 'dplyr', 
+                                    'FerrenaSCRNAseq','grid')) %dopar% 
+  { 
+    
+    
+    
+    #read in sobj 
+    sobj <- readRDS(paste0(qctmpdir, '/', code, '.rds'))
+    
+    
+    #1. normalize and cluster raw data w/o filter
+    
+    #normalize and cluster
+    suppressWarnings(sobj <- Seurat::SCTransform(sobj, verbose = T, method="glmGamPoi"))
+    
+    sobj <- Seurat::RunPCA(object = sobj, verbose = F)
+    
+    sobj <- Seurat::FindNeighbors(object = sobj, dims = 1:30, verbose = F)
+    sobj <- Seurat::FindClusters(object = sobj, resolution = 0.1, verbose = F, algorithm = 1)
+    
+    sobj <- Seurat::RunUMAP(sobj, dims = 1:30)
+    
+    
+    
+    
+    #2. apply autofilter 
+    af <- FerrenaSCRNAseq::autofilter(sobj, 
+                                      min_num_UMI = min_num_UMI,
+                                      min_num_Feature = min_num_Feature,
+                                      max_perc_mito = max_perc_mito,
+                                      max_perc_hemoglobin = max_perc_hemoglobin,
+                                      globalfilter.complexity = autofilter_complexity,
+                                      globalfilter.mito = autofilter_mito,
+                                      globalfilter.libsize = autofilter_nUMI,
+                                      mad.score.threshold = autofilter_medianabsolutedev_threshold,
+                                      loess_negative_residual_threshold = autofilter_loess_negative_residual_threshold
+    )
+    
+    
+    
+    
+    
+    #3. filter out initial auto filter 
+    
+    #name unfiltered object as sobjraw, and filtered as sobj for now and sobjsave after
+    
+    sobjraw <- sobj
+    
+    
+    cellstatus <- af$cellstatus
+    
+    goodcells <- cellstatus[cellstatus$filteredout==F,"barcodes"]
+    
+    sobj <- sobj[,goodcells]
+    
+    
+    
+    
+    #4. IF DF == T: renormalize, recluster, apply doubletfinder, refilter
+    
+    if(doubletFinder == T){
+      #filter, re-proc
+      
+      
+      #normalize and cluster
+      suppressWarnings(sobj <- Seurat::SCTransform(sobj, verbose = T, method="glmGamPoi"))
+      
+      sobj <- Seurat::RunPCA(object = sobj, verbose = F)
+      
+      sobj <- Seurat::FindNeighbors(object = sobj, dims = 1:30, verbose = F)
+      sobj <- Seurat::FindClusters(object = sobj, resolution = 0.1, verbose = F, algorithm = 1)
+      
+      sobj <- RunUMAP(sobj, dims = 1:30)
+      
+      
+      
+      ### run DF
+      af <- FerrenaSCRNAseq::doubletfinderwrapper(sobj, 
+                                                  autofilterres = af, 
+                                                  num.cores = workernum)
+      
+      
+      
+      #filter, re-proc
+      cellstatus <- af$cellstatus
+      
+      goodcells <- cellstatus[cellstatus$filteredout==F,"barcodes"]
+      
+      sobj <- sobj[,goodcells]
+      
+      
+    }
+    
+    
+    
+    
+    
+    
+    #previously we did main analysis here, for ease of code reading
+    # we'll do it later in the clustering section
+    
+    # MAKE SURE RAW PREFILT CLUSTERS ARE LABELLED APPROPRIATELY IN SOBJSAVE 
+    
+    colnames(sobj@meta.data)[grepl('SCT_snn_res.0.1', colnames(sobj@meta.data))] <- 'PREFILTER_SCT_snn_res.0.1'
+    
+    #name filtered object as sobjsave
+    sobjsave <- sobj ; rm(sobj)
+    
+    
+    
+    #7. do some analysis on raw and save it
+    
+    #do a bit of analysis
+    #add af cell status to sobjraw md
+    sobjraw@meta.data <- cbind(sobjraw@meta.data, af$cellstatus[,-1])
+    
+    #find markers; do not futurize, it breaks everything
+    
+    m <- FindAllMarkers(sobjraw, only.pos = T)
+    
+    
+    #prep genes
+    n <- 5
+    top <- m %>% group_by(cluster) %>% top_n(n = n, wt = avg_log2FC)
+    
+    #make some plots
+    d_rawclust <- DimPlot(sobjraw, group.by = 'seurat_clusters', label = T, repel = T)+ggtitle('Unfiltered data clusters', subtitle = 'Louvain res = 0.1')
+    
+    d_raw_filt <- DimPlot(sobjraw, group.by = 'filteredout', label = F, repel = T)
+    
+    
+    sobjraw$filterreason <- factor(sobjraw$filterreason, levels = names(sort(table(sobjraw$filterreason), decreasing = T)))
+    d_raw_filt_reason <- DimPlot(sobjraw, group.by = 'filterreason', label = F, repel = T)
+    
+    fp_raw_qc <- FeaturePlot(sobjraw, c('nCount_RNA', 'nFeature_RNA', 
+                                        'percent.mito', 'percent.hemoglobin'))
+    
+    #prep per-cluster filter numbers
+    tab_filt_by_clust <- table(sobjraw$filterreason, sobjraw$seurat_clusters)
+    tab_filt_by_clust <- t(tab_filt_by_clust)
+    rownames(tab_filt_by_clust) <- paste0('cluster_', rownames(tab_filt_by_clust))
+    colnames(tab_filt_by_clust) <- gsub(x = colnames(tab_filt_by_clust),
+                                        pattern = '\\.', '\n')
+    
+    
+    
+    hm_raw <- DoHeatmap(sobjraw, top$gene, raster = F)+NoLegend()
+    
+    # d_filt_clust <- DimPlot(sobjraw, group.by = newclustname, label = T, repel = T)+ggtitle('Filtered data clusters')
+    
+    
+    #alluvial plot: prep colors and make sure order is hi to lo
+    sobjraw$filterreason <- factor(sobjraw$filterreason, levels = names(sort(table(sobjraw$filterreason), decreasing = T)))
+    pal <- grDevices::colorRampPalette(RColorBrewer::brewer.pal('Dark2', n = 8))(length(levels(sobjraw$seurat_clusters))) 
+    
+    
+    ap_filt <- alluvialplot(sobjraw@meta.data[,c('seurat_clusters', 'filteredout')])+
+      scale_fill_manual(values = pal)+
+      labs(title = 'Cluster filtering')
+    
+    ap_filt_reason <- alluvialplot(sobjraw@meta.data[,c('seurat_clusters', 'filterreason')])+
+      scale_fill_manual(values = pal)+
+      labs(title = 'Cluster filtering reason')
+    
+    
+    #add some basic filter vln plots
+    comm <- af$allcommands
+    rownames(comm) <- comm$Command
+    
+    af$vln_umi <- VlnPlot(sobjraw, 'nCount_RNA', group.by = 'orig.ident')+
+      scale_y_log10(labels = scales::label_comma())+
+      geom_hline(yintercept = comm['min_num_UMI', 2], 
+                 linetype = 'dotted')+
+      labs(caption = paste0("cutoff = ", comm['min_num_UMI', 2]))
+    
+    af$vln_feature <- VlnPlot(sobjraw, 'nFeature_RNA', group.by = 'orig.ident')+
+      scale_y_log10(labels = scales::label_comma())+
+      geom_hline(yintercept = comm['min_num_Feature', 2], 
+                 linetype = 'dotted')+
+      labs(caption = paste0("cutoff = ", comm['min_num_Feature', 2]))
+    
+    
+    af$vln_mito <- VlnPlot(sobjraw, 'percent.mito', group.by = 'orig.ident')+
+      geom_hline(yintercept = comm['max_perc_mito', 2], 
+                 linetype = 'dotted')+
+      labs(caption = paste0("cutoff = ", comm['max_perc_mito', 2]))
+    
+    af$vln_hemo  <- VlnPlot(sobjraw, 'percent.hemoglobin', group.by = 'orig.ident')+
+      geom_hline(yintercept = comm['max_perc_hemoglobin', 2], 
+                 linetype = 'dotted')+
+      labs(caption = paste0("cutoff = ", comm['max_perc_hemoglobin', 2]))
+    
+    
+    #add to autofilter
+    af$d_rawclust <- d_rawclust
+    af$d_raw_filt <- d_raw_filt
+    af$d_raw_filt_reason <- d_raw_filt_reason
+    
+    af$fp_raw_qc <- fp_raw_qc
+    
+    af$tab_filt_by_clust <- tab_filt_by_clust
+    
+    af$hm_raw <- hm_raw
+    #af$d_filt_clust <- d_filt_clust
+    
+    
+    af$ap_filt <- ap_filt
+    af$ap_filt_reason <- ap_filt_reason
+    
+    
+    #change colnames for baseline sumary
+    colnames(af$baseline_qc_summary) <- gsub("summary_", "summary\n", colnames(af$baseline_qc_summary))
+    
+    
+    
+    #save it all
+    
+    
+    # save the raw objects
+    saveRDS(sobjraw, paste0(rawobjsdir, '/Unfiltered-SeuratObject-', code, '.rds'))
+    
+    #save the autofilter as a nice pdf
+    afpdf <- paste0(qcdir, '/QC_autofilter_summary-', code,'.pdf')
+    
+    pdf(afpdf, height = 7, width = 7)
+    
+    
+    
+    pdftable(af$filtersummary, title = 'Cell Filtering Summary')
+    
+    pdftable(af$allcommands, title = 'Filter parameters')
+    
+    pdftable(round(af$baseline_qc_summary, 2), title = 'QC summary stats')
+    
+    
+    
+    
+    print(af$vln_umi)
+    print(af$vln_feature)
+    print(af$vln_mito)
+    print(af$vln_hemo)
+    
+    print(af$globalfilter.complexity)
+    print(af$globalfilter.libsize)
+    print(af$globalfilter.mito)
+    
+    
+    print(af$d_rawclust)
+    print(af$d_raw_filt)
+    print(af$d_raw_filt_reason)
+    print(af$fp_raw_qc)
+    
+    
+    pdftable(af$tab_filt_by_clust, title = 'Cell filtering per cluster')
+    
+    print(af$hm_raw)
+    
+    # print(af$d_filt_clust)
+    
+    print(af$ap_filt)
+    print(af$ap_filt_reason)
+    
+    
+    
+    
+    dev.off()
+    
+    
+    #8. save procesed object
+    #code <- sobj@project.name
+    sobjfile <- paste0(qctmpdir, '/', code, '.rds')
+    
+    saveRDS(sobjsave, sobjfile)
+    
+    
+    #9. return autofilter and raw md
+    rawmd <- sobjraw@meta.data
+    rm(sobjsave, sobjraw)
+    invisible(gc(full = T, reset = F, verbose = F))
+    
+    
+    list(af, rawmd)
+    
+    
+  }
+
+
+
+parallel::stopCluster(cl)
+
+#recover the autofilter and metadata lists
+aflist <- lapply(af_md_list, function(subl){
+  subl[[1]]
+})
+
+mdlist <-  lapply(af_md_list, function(subl){
+  subl[[2]]
+})
+
+names(aflist) <- pseudobulk_metadata$Code
+names(mdlist) <- pseudobulk_metadata$Code
+
+#clean mem
+rm(af_md_list)
+invisible(gc(full = T, reset = F, verbose = F))
+
+
+
+
+```
+
+
+
+
+
+```{r filtering_plotprep, message='hold', results='hide', message=F, fig.keep='all'}
+
+### prepare some summary plots for filtering
+
+
+# #from autofilter list, get baseline summaries and cell filter stats
+cn <- colnames(aflist[[1]]$baseline_qc_summary)
+
+bsl <- lapply(cn, function(var){
+  
+  sampsum <- lapply(1:length(aflist), function(i){
+    
+    af <- aflist[[i]]
+    samp <- names(aflist)[i]
+    sampsum <- af$baseline_qc_summary[,var,drop = F]
+    colnames(sampsum) <- samp
+    
+    sampsum
+    
+    
+  })
+  
+  sampsum <- dplyr::bind_cols(sampsum)
+  sampsum <- t(sampsum)
+  
+})
+
+cn <- gsub(x=cn, 'summary\n', '')
+names(bsl) <- cn
+
+
+
+#from outlier list, filter summary
+fs <- lapply(1:length(aflist), function(i){
+  af <- aflist[[i]]
+  samp = names(aflist)[i]
+  sum <- af$filtersummary
+  rownames(sum) <- sum[,1]
+  sum <- sum[,2, drop = F]
+  colnames(sum) <- samp
+  sum
+})
+
+fs <- dplyr::bind_cols(fs)
+fs <- t(fs)
+
+#shorten names
+colnames(fs) <- gsub('globalfilter', 'auto', colnames(fs))
+colnames(fs) <- gsub('DoubletFinder_doublet', 'Doublet', colnames(fs))
+
+#rearragne, total cells, unfilt, then filtered cells
+fs <- cbind( fs[,c(ncol(fs), ncol(fs)-1)], fs[,1:(ncol(fs)-2)] )
+
+
+## also prep some summary plots for each sample ##
+
+### pre-filt plots
+
+combmd <- dplyr::bind_rows(mdlist)
+
+
+umilims <- c(min(combmd$nCount_RNA), max(combmd$nCount_RNA)) 
+featlims <- c(min(combmd$nFeature_RNA), max(combmd$nFeature_RNA))
+
+### ridgeplots / ridgeline density plots
+
+
+# #density plot for nCount_RNA
+var <- "nCount_RNA"
+submd <- combmd[,c(var,'orig.ident')]
+colnames(submd)[1] <- 'var'
+submd$var <- log10(submd$var)
+maxdens <- aggregate(var ~ orig.ident, submd, function(x){max(density(x)$y)})
+
+# submd <- combmd[,c(var,'orig.ident')]
+# colnames(submd)[1] <- 'var'
+# repelcoords <- aggregate(var ~ orig.ident, submd, median)
+# repelcoords$maxdens <- maxdens$var
+# 
+# dens_UMI <- ggplot(combmd, aes(x = .data[[var]], col = orig.ident))+
+#   geom_density()+
+#   ggrepel::geom_text_repel(inherit.aes = F,
+#                            data = repelcoords,
+#                            aes(x = var, y = maxdens, label = orig.ident, color = orig.ident))+
+#   scale_x_log10(labels = scales::label_comma(), name = var)
+
+dens_UMI <- ggplot(combmd, aes(x = .data[[var]], y=orig.ident, fill=after_stat(log10(x))))+
+  geom_density_ridges_gradient(scale=0.9) +
+  scale_x_log10(labels = scales::label_comma(), name = var, limits = umilims)+
+  scale_y_discrete(limits = rev(pseudobulk_metadata$Code))+
+  viridis::scale_fill_viridis( option = "C", alpha = 0.7) +
+  theme_ridges()+theme(legend.position = 'none')
+
+# 
+# 
+# #density plot for nFeature_RNA
+var <- "nFeature_RNA"
+submd <- combmd[,c(var,'orig.ident')]
+colnames(submd)[1] <- 'var'
+submd$var <- log10(submd$var)
+maxdens <- aggregate(var ~ orig.ident, submd, function(x){max(density(x)$y)})
+
+# submd <- combmd[,c(var,'orig.ident')]
+# colnames(submd)[1] <- 'var'
+# repelcoords <- aggregate(var ~ orig.ident, submd, median)
+# repelcoords$maxdens <- maxdens$var
+# 
+# dens_feature <- ggplot(combmd, aes(x = .data[[var]], col = orig.ident))+
+#   geom_density()+
+#   ggrepel::geom_text_repel(inherit.aes = F,
+#                            data = repelcoords,
+#                            aes(x = var, y = maxdens, label = orig.ident, color = orig.ident))+
+#   scale_x_log10(labels = scales::label_comma(), name = var)
+
+
+dens_feature <- ggplot(combmd, aes(x = .data[[var]], y=orig.ident, fill=after_stat(log10(x))))+
+  geom_density_ridges_gradient(scale=0.9) +
+  scale_x_log10(labels = scales::label_comma(), name = var, limits = featlims)+
+  scale_y_discrete(limits = rev(pseudobulk_metadata$Code))+
+  viridis::scale_fill_viridis( option = "C", alpha = 0.7) +
+  theme_ridges()+theme(legend.position = 'none')
+# 
+# 
+# #density plot for mito
+var <- "percent.mito"
+submd <- combmd[,c(var,'orig.ident')]
+colnames(submd)[1] <- 'var'
+maxdens <- aggregate(var ~ orig.ident, submd, function(x){max(density(x)$y)})
+
+# submd <- combmd[,c(var,'orig.ident')]
+# colnames(submd)[1] <- 'var'
+# repelcoords <- aggregate(var ~ orig.ident, submd, median)
+# repelcoords$maxdens <- maxdens$var
+# 
+# dens_mito <- ggplot(combmd, aes(x = .data[[var]]+0.1, col = orig.ident))+
+#   geom_density()+
+#   ggrepel::geom_text_repel(inherit.aes = F,
+#                            data = repelcoords,
+#                            aes(x = var, y = maxdens, label = orig.ident, color = orig.ident))+
+#   scale_y_continuous(name = 'density')
+
+
+dens_mito <- ggplot(combmd, aes(x = .data[[var]]+1, y=orig.ident, fill=after_stat(log10(x))))+
+  geom_density_ridges_gradient(scale=0.9) +
+  scale_x_log10(labels = scales::label_comma(), name = var, limits = c(1,100))+
+  scale_y_discrete(limits = rev(pseudobulk_metadata$Code))+
+  viridis::scale_fill_viridis( option = "C", alpha = 0.7) +
+  theme_ridges()+theme(legend.position = 'none')
+# 
+# 
+# #density plot for hemoglobin
+var <- "percent.hemoglobin"
+submd <- combmd[,c(var,'orig.ident')]
+colnames(submd)[1] <- 'var'
+maxdens <- aggregate(var ~ orig.ident, submd, function(x){max(density(x)$y)})
+
+# submd <- combmd[,c(var,'orig.ident')]
+# colnames(submd)[1] <- 'var'
+# repelcoords <- aggregate(var ~ orig.ident, submd, median)
+# repelcoords$maxdens <- maxdens$var
+# 
+# dens_hemo <- ggplot(combmd, aes(x = .data[[var]]+0.01, col = orig.ident))+
+#   geom_density()+
+#   ggrepel::geom_text_repel(inherit.aes = F,
+#                            data = repelcoords,
+#                            aes(x = var, y = maxdens, label = orig.ident, color = orig.ident))+
+#   scale_y_continuous(name = 'density')
+
+dens_hemo <- ggplot(combmd, aes(x = .data[[var]]+1, y=orig.ident, fill=after_stat(log10(x))))+
+  geom_density_ridges_gradient(scale=0.9) +
+  scale_x_log10(labels = scales::label_comma(), name = var,limits = c(1,100))+
+  scale_y_discrete(limits = rev(pseudobulk_metadata$Code))+
+  viridis::scale_fill_viridis( option = "C", alpha = 0.7) +
+  theme_ridges()+theme(legend.position = 'none')
+
+
+
+
+## also prep some summary plots for each sample ##
+
+### post-fld plots
+
+combmd <- dplyr::bind_rows(mdlist)
+
+combmd <- combmd[combmd$filteredout == F,]
+
+### ridgeplots / ridgeline density plots
+
+# #density plot for nCount_RNA
+var <- "nCount_RNA"
+
+post_dens_UMI <- ggplot(combmd, aes(x = .data[[var]], y=orig.ident, fill=after_stat(log10(x))))+
+  geom_density_ridges_gradient(scale=0.9) +
+  scale_x_log10(labels = scales::label_comma(), name = var,
+                limits = umilims )+
+  scale_y_discrete(limits = rev(pseudobulk_metadata$Code))+
+  viridis::scale_fill_viridis( option = "C", alpha = 0.7) +
+  theme_ridges()+theme(legend.position = 'none')
+
+
+# #density plot for nFeature_RNA
+var <- "nFeature_RNA"
+
+
+post_dens_feature <- ggplot(combmd, aes(x = .data[[var]], y=orig.ident, fill=after_stat(log10(x))) )+
+  geom_density_ridges_gradient(scale=0.9) +
+  scale_x_log10(labels = scales::label_comma(), name = var,
+                limits = featlims )+
+  scale_y_discrete(limits = rev(pseudobulk_metadata$Code))+
+  viridis::scale_fill_viridis( option = "C", alpha = 0.7) +
+  theme_ridges()+theme(legend.position = 'none')
+
+# #density plot for mito
+var <- "percent.mito"
+
+post_dens_mito <- ggplot(combmd, aes(x = .data[[var]]+1, y=orig.ident, fill=after_stat(log10(x))))+
+  geom_density_ridges_gradient(scale=0.9) +
+  scale_x_log10(labels = scales::label_comma(), name = var,
+                limits = c(1,100) )+
+  scale_y_discrete(limits = rev(pseudobulk_metadata$Code))+
+  viridis::scale_fill_viridis( option = "C", alpha = 0.7) +
+  theme_ridges()+theme(legend.position = 'none')
+
+
+# #density plot for hemoglobin
+var <- "percent.hemoglobin"
+
+post_dens_hemo <- ggplot(combmd, aes(x = .data[[var]]+1, y=orig.ident, fill=after_stat(log10(x))))+
+  geom_density_ridges_gradient(scale=0.9) +
+  scale_x_log10(labels = scales::label_comma(), name = var,
+                limits = c(1,100) )+
+  scale_y_discrete(limits = rev(pseudobulk_metadata$Code))+
+  viridis::scale_fill_viridis( option = "C", alpha = 0.7) +
+  theme_ridges()+theme(legend.position = 'none')
+
+
+
+
+
+
+
+### prepare a whole dataset qc summary pdf
+
+# adjust filter summary table colnames, too long
+colnames(fs) <- gsub('auto.', '', colnames(fs))
+
+allsampfiltsumm <- paste0(qcdir, '/AllSamples_QC_Summary.pdf')
+
+
+#add plot titles
+
+dens_UMI <-  dens_UMI + ggtitle('Pre-Filter UMI distribution plot')   
+post_dens_UMI <-  post_dens_UMI + ggtitle('Post-Filter UMI distribution plot')   
+
+dens_feature <-  dens_feature + ggtitle('Pre-Filter Unique Gene distribution plot')   
+post_dens_feature <- post_dens_feature + ggtitle('Post-Filter Unique Gene distribution plot')   
+
+dens_mito <-  dens_mito + ggtitle('Pre-Filter Percent Mito distribution plot')   
+post_dens_mito <-  post_dens_mito + ggtitle('Post-Filter Percent Mito distribution plot')
+
+dens_hemo <-   dens_hemo + ggtitle('Pre-Filter Percent Hemoglobin distribution plot')   
+post_dens_hemo <- post_dens_hemo + ggtitle('Post-Filter Percent Hemoglobin distribution plot')   
+
+
+
+
+
+pdf(allsampfiltsumm, height = 7, width = 7)
+
+
+print(pdftable(fs, title = "Cell Filter Summary (cell numbers)"))
+
+
+print( pdftable( round(bsl$nCount_RNA,1) , title = 'Pre-Filter UMI distribution') )
+
+print(  dens_UMI   )
+print(  post_dens_UMI   )
+
+
+print( pdftable( round(bsl$nFeature_RNA,1) , title = 'Pre-Filter Unique Gene distribution') )
+
+print(  dens_feature   )
+print(  post_dens_feature  )
+
+
+
+print( pdftable( round(bsl$perc.mito,1) , title = 'Pre-Filter Percent Mito distribution') )
+
+print(  dens_mito  )
+print(  post_dens_mito   )
+
+
+
+print( pdftable( round(bsl$perc.hemoglobin,1) , title = 'Pre-Filter Percent Hemoglobin distribution') )
+
+print(  dens_hemo   )
+print(  post_dens_hemo   )
+
+dev.off()
+
+
+```
+
+
+```{r filtprint_mainsummary, results='asis'}
+
+
+
+
+
+cat("\n\n
+
+Below we show the number of cells removed with filtering. BasicFilter refers to cells failing a minimum threshold: by default, cells must have >= 500 UMIs, 200 unique genes, and <= 25% mitochondria and hemoglobin content.
+
+Auto.complexity refers to outliers from a regression analysis modelling number of genes by number of UMIs, or the 'complexity' of the cell. Specifically we model the log of each of these, where the relationship is very close to linear. We use a double-regression strategy of both linear and loess regression, and outlier cells must have both a high linear regression Cook's distance and very low Loess negative residuals. This means that cells with a lower than expected number of genes given the number of UMIs are filtered out. Typically, this captures poor quaity cells of extreme low-complexity realy cells such as RBCs.
+
+Auto.libsize refers to cells identified as very low outliers based on median absolute deviation from the general distribtuion of UMIs. Auto.mito refers to cells identified as high outliers based on median absolute deviation from the general distribtuion of mitochondrial content.")
+
+knitr::kable(fs)
+
+
+
+
+cat('\n\n
+    
+Here we show details of the filtering approach, including the minimum UMI and unique gene cutoffs, maximum percent mito and percent hemoglobin cutoffs. Additionally, we show paramters for the sample-wise cutoffs including median absolute deiation (mad) score threshold, and loess residual threshold. These are used to make tighter cutoffs in an automated, sample-by-sample basis. The actual sample wise cutoffs are provided for each sample in a report in the QC folder called "qualitycontrol_filtering".')
+
+knitr::kable( aflist[[1]]$allcommands )
+
+
+
+```
+
+
+#### UMI level filtering
+
+Here we show the distributions of UMI content before and after filtering.
+
+
+```{r filtprint_umi, results='asis'}
+
+
+cat('Here we show the summary statistics for the distributions of UMIs in each sample before filtering.')
+knitr::kable(bsl$nCount_RNA)
+
+
+cat('Here we plot the distribtuion of UMIs per cell for all samples before filtering.')
+print(dens_UMI)
+
+cat('Here we plot the distribtuion of UMIs per cell for all samples after filtering.')
+print(post_dens_UMI)
+
+
+```
+
+
+
+
+
+#### Feature level filtering
+
+Here we show the distributions of feature content before and after filtering.
+
+
+```{r filtprint_feature, results='asis'}
+
+
+cat('Here we show the summary statistics for the distributions of features in each sample before filtering.')
+knitr::kable(bsl$nFeature_RNA)
+
+
+cat('Here we plot the distribtuion of features per cell for all samples before filtering.')
+print(dens_feature)
+
+cat('Here we plot the distribtuion of features per cell for all samples after filtering.')
+print(post_dens_feature)
+
+
+```
+
+
+
+
+#### Mitochondrial content level filtering
+
+Here we show the distributions of mito content before and after filtering.
+
+
+```{r filtprint_mito, results='asis'}
+
+
+cat('Here we show the summary statistics for the distributions of mitochondrial content in each sample before filtering.')
+knitr::kable(bsl$perc.mito)
+
+
+cat('Here we plot the distribtuion of mitochondrial content per cell for all samples before filtering.')
+print(dens_mito)
+
+cat('Here we plot the distribtuion of mitochondrial content per cell for all samples after filtering.')
+print(post_dens_mito)
+
+
+```
+
+
+
+#### Hemoglobin content level filtering
+
+Here we show the distributions of hemoglobin content before and after filtering.
+While few reports use this threshold, this can be very useful to exclude RBCs that are still detected in the data despite RBC lysis buffer being used during sample preparation.
+
+
+```{r filtprint_hemo, results='asis'}
+
+
+cat('Here we show the summary statistics for the distributions of hemoglobin content in each sample before filtering.')
+knitr::kable(bsl$perc.hemoglobin)
+
+
+cat('Here we plot the distribtuion of hemoglobin content per cell for all samples before filtering.')
+print(dens_hemo)
+
+cat('Here we plot the distribtuion of hemoglobin content per cell for all samples after filtering.')
+print(post_dens_hemo)
+
+
+```
+
+
+
+
+
+
+
+# Processing and analysis for each sample
+
+
+
+As stated above, below we detail the analysis for each sample, which includes:
+
+* Preprocessing: Normalize and scale gene expression with the Seurat SingleCellTransform (SCT) pipeline
+
+* Dimension reduction: Principal component analysis, graph construction, clustering, and visualization via UMAP. Ideally, this step requires some hyperparameter selection, including selecting the number of PCs and Louvain clustering resolution
+
+* Marker analysis: using a differential expression test, find the unique marker genes of each cluster
+
+* Label transfer: from a reference single-cell dataset, quantify how much each cell resembles a known cell type from a reference dataset, such as one derived from a paper or single-cell database
+
+
+
+
+
+
+## Select number of Principal Components (PCs) to use based on elbow plot
+
+Principal Component Analysis (PCA) is important for downstream analysis including clustering and visualization with non-linear dimension reduction such as UMAP.
+
+PCA finds high-dimensional planes which vary strongly across the cells. Essentially, each PC consists of very highly correlated genes. The first PC specifically can be thought of as a list of genes that drive together drive the most variance across cells. Each following PC has less variance.
+
+PCA is used to help de-noising the data for downstream tasks like clustering. Individual genes can be noisy, but groups of correlated genes are less noisy.
+
+An important caveat of PCA is that it is a linear method, in that the PC axes it finds are straight lines. This is okay for denoising genes but can often fail to capture the complexity of single-cell RNA-seq and other types of high dimensional genomic datasets. This is why the analysis does not stop at PCA but includes other more complex non-linear methods described below.
+
+One important parameter for downstream analysis is the selection of how many PCs to use. We want to select the PCs that explain a sufficient amount of variance in the data. One way to do that is via “elbow plots” of each PC versus the standard deviation. The cutoff is made at the PC at which the SD stabilizes and becomes horizontal.
+
+Including too few PCs can mean missing important sources of variations downstream and may result in for example, cell types being merged together in a single cluster. Conversely, including too many PCs can introduce noise into the data and result in clusters not easily explained by biology.
+
+By default, we set the number of PCs to use as 30, which will be appropriate for most samples and is recommended as a default by the developers of SingleCellTransform. If the “Elbow” in the elbow plots strongly deviates from this, a different value may be selected and the analysis can be rerun later.
+
+
+
+```{r preproc_individual_SCT, message='hold', results='hide', message=F, fig.keep='all'}
+
+
+
+#clean up env
+rm(aflist, bsl, combmd, 
+   dens_feature, post_dens_feature,
+   dens_hemo, post_dens_hemo,
+   dens_mito, post_dens_mito,
+   dens_UMI, post_dens_UMI,
+   fs, maxdens, mdlist,
+   submd, featlims, umilims)
+
+invisible(gc(full = T, reset = F, verbose = F))
+
+
+#test if force_redo is T or if saved sobj result does not exist
+## if test == T, do it, if not skip it
+### WILL IMPLEMENT LATER
+
+
+### may implement later: read in serial, process parallel?
+# readin serial, split up according to num workers 
+# https://stackoverflow.com/questions/3318333/split-a-vector-into-chunks
+# x = pseudobulk_metadata$code; split(x, ceiling(seq_along(x)/workernum))
+
+# force_redo_test <- T
+
+
+
+
+#read in data and run PCA
+sobjlist <- lapply(pseudobulk_metadata$Code, function(code){
+  
+  sobjfile <- paste0(qctmpdir, '/', code, '.rds')
+  # sobjfile <- paste0(outdir_indi_seuratobjs, '/SeuratObject-', code, '.rds')
+  
+  sobj <- readRDS(sobjfile)
+  
+  DefaultAssay(sobj) <- 'RNA'
+  
+  sobj <- SCTransform(sobj, assay = "RNA", verbose = verbose, method = 'glmGamPoi', vst.flavor='v2')
+  
+  sobj <- RunPCA(sobj, assay = "SCT", verbose = verbose)
+  
+  sobj
+  
+})
+
+names(sobjlist) <- pseudobulk_metadata$Code
+
+# #read from tmp dir
+# sobjfile <- paste0(qctmpdir, '/SeuratObject-', code, '.rds')
+
+# #remove tmp dir
+unlink(qctmpdir, recursive = T)
+
+
+
+## check elbow plot
+
+elbowplots <- lapply(sobjlist, function(sobj){
+  
+  ElbowPlot(sobj, ndims = 50) + ggtitle(sobj@project.name)
+  
+})
+
+
+
+```
+
+
+```{r elbowplots_print, fig.height=3, fig.width=3}
+
+#plot one at a time rather than side by side, label was getting cut off
+#patchwork::wrap_plots(elbowplots)
+
+for(i in 1:length(elbowplots)){
+  print(elbowplots[[i]] + geom_vline(xintercept = pcs_indi, linetype = 'dotted', color = 'red'))
+}
+
+
+
+```
+
+
+
+
+
+## Clustering
+
+Once PCA is completed and the number of critical PCs is selected, we perform a number of steps that all involve grouping spots together based on shared transcriptomic patterns:
+
+* k-nearest neighbor graph construction
+
+* Louvain clustering
+
+* Non-linear dimensionality reduction for visualization, such as t-SNE or UMAP
+
+
+This process allows us to group cells together based on transcriptomic similarity. Louvain clustering optionally allows for input of a hyperparameter called “resolution,” with high resolution finding larger numbers of clusters. By default, we set this value to 0.5.
+
+
+```{r preproc_individual_graph_cluster_umap, message='hold', results='hide', message=F, fig.keep='all'}
+
+
+
+#clean env
+rm(elbowplots)
+invisible(gc(full = T, reset = F, verbose = F))
+
+
+# ## using ndims_vec, continue individual sample pre-processing.
+# 
+# Calculate graph, clustering, and umap.
+
+sobjlist <- lapply(sobjlist, function(sobj){
+  
+  # ndim_sample <- ndims_vec[sobj@project.name] #sample-wise PC selection
+  ndim_sample <- pcs_indi
+  
+  sobj <- FindNeighbors(sobj, reduction = "pca", dims = c(1:ndim_sample), verbose = verbose)
+  sobj <- FindClusters(sobj, verbose = verbose, resolution = res_indi)
+  sobj <- RunUMAP(sobj, reduction = "pca", dims = c(1:ndim_sample), verbose = verbose)
+  
+  sobj
+  
+  
+})
+
+# ```
+
+
+
+
+# ```{r markers_individualsamps_clusters}
+
+
+# ## calulcate markers for individual sample clusters
+# 
+# This is parallelized with Future as per Seurat recommendations.
+# Future multisession mode.
+
+#turn off future, it seems to break things
+
+# future::plan('multisession', workers=workernum)
+
+
+mlist_individualsamples_clusters <- lapply(sobjlist, function(sobj){
+  
+  m <- FindAllMarkers(sobj, only.pos = T, verbose = verbose) 
+  
+})
+
+
+
+# future::plan(strategy = 'sequential')
+
+
+
+
+#write them as csv files
+
+sampmarkersave <- paste0(outdir_indi, '/individualsample_clustermarkers-PCs_', pcs_indi, '-res_', res_int, '/' )
+dir.create(sampmarkersave)
+
+invisible(
+  lapply(1:length(mlist_individualsamples_clusters), function(i){
+    
+    m <- mlist_individualsamples_clusters[[i]]
+    code <- names( mlist_individualsamples_clusters )[i]
+    
+    sampmarkersave_eachsamp <- paste0(sampmarkersave, code, '_clustermarkers.csv')
+    
+    write.csv(m, sampmarkersave_eachsamp, quote = F, row.names = F)
+    
+  })
+)
+
+
+
+
+```
+
+
+
+
+
+
+
+
+```{r labeltransfermessage_1, results='asis'}
+
+
+
+if(use_labeltransfer == T){
+  
+  
+  text <- '## Label transfer from reference scRNA-seq data
+
+With a reference single-cell RNA-seq dataset, we use label transfer to estimate the contributions of cell types to each spot.
+
+With spatial transcriptomics, each spot is 55 micrometers(µm) in diameter. Cells can range in size from much smaller than this at ~7.5 µm for red blood cells, to much larger at 120 µm for egg cells. http://book.bionumbers.org/how-big-is-a-human-cell/ Each spot may come from a single cell or may represent the transcriptomic information of multiple cells.
+
+If we have single-cell RNA-seq data from a similar tissue as our spatial data, we can use that single-cell data to learn about which cell types may contribute to the spots in the spatial data.
+
+
+One way to do this is via "label transfer", an integration-based machine learning method for classification. We use the [Seurat method](https://www.cell.com/cell/fulltext/S0092-8674(19)30559-8) for label transfer here.
+
+'
+  
+  cat(text)
+  
+}
+
+
+
+```
+
+
+
+
+
+```{r labeltransfer}
+
+
+
+
+if(use_labeltransfer == T){
+  
+  reference <- readRDS(refdatapath)
+  
+  
+  ### unfortunately, Seurat does not like underscores in feature names, so we need to replace
+  if( any(grepl('_', reference$Celltype)) ){
+    ct <- reference$Celltype
+    ct <- as.character(ct)
+    ct <- gsub('_', '-', ct)
+    ct <- factor(ct, levels = names(sort(table(ct), decreasing = T)) )
+    reference$Celltype <- ct
+  }
+  
+  
+  # #pre-process the reference data
+  # # make sure this is done beforehand!!!
+  # reference <- SCTransform(reference, ncells = 3000, verbose = verbose) %>%
+  #   RunPCA(verbose = verbose) %>%
+  #   RunUMAP(dims = 1:30, verbose = verbose)
+  # 
+  # reference$Celltype <- reference$subclass
+  # 
+  # refdatapath = "data/vignette/allen_cortex_preproc.rds"
+  # saveRDS(reference, refdatapath)
+  
+  ### actually label-transfer ###
+  
+  
+  
+  sobjlist <- lapply(sobjlist, function(sobj){
+    
+    if(verbose == T){ message('\nLabel transfer for: ',sobj@project.name, '\n') }
+    
+    
+    #get the integration score matrix
+    anchors <- FindTransferAnchors(reference = reference, query = sobj, normalization.method = "SCT", verbose = verbose)
+    
+    predictions.assay <- TransferData(anchorset = anchors, 
+                                      refdata = reference$Celltype, 
+                                      prediction.assay = T,
+                                      weight.reduction = sobj[["pca"]], dims = 1:30, verbose = verbose)
+    
+    
+    sobj[["predictions"]] <- predictions.assay
+    
+    
+    #get the top calls for each spot
+    
+    topcalls <- TransferData(anchorset = anchors, refdata = reference$Celltype, prediction.assay = F,
+                             weight.reduction = sobj[["pca"]], dims = 1:30, verbose = verbose)
+    
+    levs <- names( sort(table(topcalls$predicted.id), decreasing = T) )
+    sobj$top_celltype_call_seurat <- factor(topcalls$predicted.id, levels = levs)
+    sobj$top_celltype_call_seurat_score <- topcalls$prediction.score.max
+    
+    
+    sobj
+    
+  })
+  
+  
+  
+  # m_reference <- readRDS(m_reference)
+  
+  # actually we only need this later. read in at the righ time. for now save path
+  m_reference_path <- m_reference
+  
+  
+  
+  
+  
+  
+  rm(reference) #for memory saving
+  
+  
+  # ```
+  
+  invisible(gc(full = T, reset = F, verbose = F))
+  
+  
+  
+}
+
+
+
+
+```
+
+
+
+# Individual sample summary plots (pre-integration)
+
+In each sample, we perform clustering and label transfer.
+
+Here we plot the clusters and cluster markers for each sample.
+
+It can be useful to assess if clusters represent real biology. Some clusters may represent spots with low cellular density, i.e., there are few actual cells in the spot, but rather things like extracellular matrix space, etc. In this case, the cluster will likely have fewer UMIs or genes (nCount_Spatial and nFeature_Spatial, respectively) and may have few or no clear cluster markers.
+
+
+
+
+
+```{r summaryplots_individualsamples, message=FALSE, warning=F, results='hide', fig.show='hide'}
+
+
+
+
+#save each as pdf, one per sample...
+dir.create( paste0(outdir_indi, '/individualsample_plots/') , recursive = T)
+
+
+#prep summary plots for each sample
+# umap of clusters
+# spatialdimplot with clusters
+# insert QC per cluster plots here?
+# cluster markers
+
+summaryplots_individualsamples <- lapply( sobjlist , function(sobj){
+  
+  # set up title
+  sampname <- sobj@project.name
+  
+  #get markers
+  m <- mlist_individualsamples_clusters[[sampname]]
+  
+  
+  
+  #clusters plot
+  # for auto plotting with manually set res, need to use paste here...
+  #there is still a bug with seurat, spatialdimplot takes only default ident
+  
+  plottingvar <- paste0('SCT_snn_res.', res_indi)
+  
+  #dimplot of clusters
+  d1_a <- wrap_plots(
+    DimPlot(sobj, group.by = plottingvar, label = T, repel = T)
+  ) + plot_annotation(title = sampname, caption = 'Louvain Clusters plotted on UMAP')
+  
+  
+  
+  #spatial dimplot of clusters
+  # d1_b <- wrap_plots(
+  #   SpatialDimPlot(SetIdent(sobj, value = sobj@meta.data[,plottingvar]), label = T, repel = T, label.size = 4, alpha = 0.5)+ggtitle(plottingvar)
+  # ) + plot_annotation(title = sampname, caption = 'Louvain Clusters plotted on spatial slide')
+  # 
+  # 
+  
+  # qc plots, do it with patchwork
+  d0 <- wrap_plots(ncol = 2, list(
+    VlnPlot(sobj, 'nCount_RNA', pt.size = 0.1)+NoLegend() ,
+    VlnPlot(sobj, 'nFeature_RNA', pt.size = 0.1)+NoLegend()
+  )) + plot_annotation(title = sampname)
+  
+  
+  # cluster markers
+  
+  
+  DefaultAssay(sobj) <- 'SCT'
+  n <- 5
+  top <- m %>% group_by(cluster) %>% top_n(n = n, wt = avg_log2FC)
+  genes <- top$gene
+  #make sure genes are in 
+  if( any( !(genes %in% rownames(sobj@assays$SCT@scale.data)) ) ){
+    
+    #try getresidual...
+    missinggenes <- genes[!(genes %in% rownames(sobj@assays$SCT@scale.data))]
+    sobj <- GetResidual(sobj, missinggenes, na.rm = F, replace.value = T)
+    
+    #it can be complicated doing this after integration, some genes are NAs... 
+    scgem <- sobj@assays$SCT@scale.data
+    
+    if( any( !complete.cases(scgem) ) ){
+      scgem <- scgem[complete.cases(scgem),]
+      top <- top[top$gene %in% rownames(scgem),]
+      sobj@assays$SCT@scale.data <- scgem
+    }
+    rm(scgem)
+    
+  }
+  
+  #prep heatmap
+  top <- top[top$gene %in% rownames(sobj),]
+  gem <- sobj@assays$SCT@scale.data
+  gem <- gem[match(top$gene, rownames(gem)),]
+  #annot for clusters
+  #first order gem by cluster...
+  md <- sobj@meta.data
+  md <- md[order(md$seurat_clusters),]
+  gem <- gem[,match(rownames(md), colnames(gem))]
+  clust_bc <- setNames(md$seurat_clusters,
+                       nm = colnames(gem)
+  )
+  col_clust <- setNames(scales::hue_pal()(length(levels(sobj$seurat_clusters))),
+                        nm = levels(sobj$seurat_clusters))
+  ha_clust <- ComplexHeatmap::HeatmapAnnotation(Cluster = clust_bc, col = list(Cluster = col_clust), show_legend = F)
+  #annot for markers
+  #set genes according to ct_ordered
+  top$cluster <-factor(top$cluster, levels=unique(top$cluster))
+  # top <- top[order(top$cluster),]
+  gem <- gem[match(top$gene, rownames(gem)),]
+  ct_gene <- setNames(top$cluster,
+                      nm=top$gene)
+  col_gene <- col_clust
+  col_gene <- col_gene[names(col_gene) %in% top$cluster]
+  ha_genes <- ComplexHeatmap::rowAnnotation(Cluster = ct_gene, col = list(Cluster = col_gene),
+                                            show_annotation_name=F)
+  #restrict range
+  gem[gem>5] <- 5
+  gem[gem<-5] <- -5
+  #actual heatmap
+  hm <- ComplexHeatmap::Heatmap(gem,
+                                # column_title = 'Integrated clusters',
+                                column_labels = rep('', ncol(gem)),
+                                row_names_gp = grid::gpar(fontsize = 5),
+                                column_split = md$seurat_clusters,
+                                row_split = top$cluster,
+                                row_title_gp = grid::gpar(fontsize = 5),
+                                row_gap = unit(0.8, "mm"), 
+                                column_gap = unit(0.8, "mm"),
+                                row_title_rot = 0,
+                                column_title_rot = 45,
+                                column_title_gp = grid::gpar(fontsize = 7),
+                                name = 'Scaled\nExpression',
+                                cluster_columns = F,
+                                cluster_rows = F,
+                                top_annotation = ha_clust,
+                                left_annotation = ha_genes,
+                                use_raster = F)
+  
+  # invisible(hm <- draw(hm, column_title = sampname))
+  
+  
+  list(
+    d1_a=d1_a,
+    
+    hm=hm,
+    d0=d0
+  )
+  
+} )
+
+
+#name the list elements, one per sample
+
+names(summaryplots_individualsamples) <- sapply(sobjlist, function(sobj){sobj@project.name}, simplify = T)
+
+
+
+
+
+#save as PDFs
+lapply(names(summaryplots_individualsamples), function(sampname){
+  pdf( paste0(outdir_indi, '/individualsample_plots/', sampname, '.pdf'), width = 9, height = 9 )
+  
+  print( summaryplots_individualsamples[[sampname]] )
+  
+  dev.off()
+  
+})
+
+
+
+
+if(use_labeltransfer == T){
+  
+  
+  
+  ## plots of cell type predictions from label transfer
+  
+  ctplots_individualsamples <- lapply( sobjlist, function(sobj){
+    
+    #set up title
+    sampname <- sobj@project.name
+    
+    
+    
+    
+    #clusters plot
+    # for auto plotting with manually set res, need to use paste here...
+    #there is still a bug with seurat, spatialdimplot takes only default ident
+    
+    plottingvar <- paste0('SCT_snn_res.', res_indi)
+    
+    #dimplot of clusters
+    d1_a <- wrap_plots(
+      DimPlot(sobj, group.by = plottingvar, label = T, repel = T)
+    ) + plot_annotation(title = sampname, caption = 'Louvain Clusters plotted on UMAP')
+    
+    
+    
+    
+    ### prep the Celltype Plots ("ctplots")
+    
+    
+    # violinplots and spatialfeatureplots of all celltypes
+    
+    #get exp of the celltypes
+    rs <- Matrix::rowSums(sobj@assays$predictions@data)
+    rs <- head( rs , -1)
+    
+    #keep only celltypes that are exp
+    rs <- sort(rs[rs>0], decreasing = T)
+    ct_in <- names(rs)
+    
+    #plots of all celltypes in data...
+    DefaultAssay(sobj) <- 'predictions'
+    
+    ct_plots <- lapply(setNames(ct_in,ct_in), function(ct){
+      #FeaturePlot(sobj, features = ct) + ggtitle(sampname)
+      
+      ct_plot <-  VlnPlot(sobj, ct)+NoLegend()+ylab('Prediction score') + 
+        plot_annotation(title = sampname)
+      
+      return(ct_plot)
+      
+    })
+    DefaultAssay(sobj) <- 'SCT'
+    
+    
+    
+    
+    #heatmap of the prediction scores per cluster
+    # use scaled values, comparable between clusters
+    # get avgs
+    avgs <- AverageExpression(sobj, assays = 'predictions', return.seurat = F)
+    #remove max
+    avgs <- head( as.data.frame(avgs) , -1)
+    # remove empty prediction rows with all 0s
+    avgs <- avgs[Matrix::rowSums(avgs)>0,]
+    #make column titles nicer
+    colnames(avgs) <- gsub('predictions.', 'cluster_', colnames(avgs))
+    #format as numeric matrix
+    avgs <- as.matrix(avgs)
+    ### scale --> this emphasizes diffs between clusters, seems to put related cell types together
+    avgs <- t(scale(t(avgs)))
+    #select middle value  for color scale
+    medval <- mean(avgs)
+    #plot it
+    hm_ctscores <- ComplexHeatmap::Heatmap(avgs,
+                                           name = 'Scaled\nmean prediction\nscores per cluster',
+                                           column_title = sampname,
+                                           rect_gp = grid::gpar(col = "white", lwd = 0.5),
+                                           circlize::colorRamp2(c(min(avgs), medval, max(avgs)), c("blue", "white", "red")))
+    
+    
+    
+    
+    
+    #for dotplot, add dendrogram and row label order
+    # it may throw a warning about drawing plot first etc, 
+    #shouldn't be an issue if we set seed, which we did
+    suppressWarnings(
+      dend <- row_dend(hm_ctscores)
+    )
+    
+    #get ordered row labels for dotplot and other plots
+    suppressWarnings(
+      ct_ordered <- rownames(hm_ctscores@matrix)[ComplexHeatmap::row_order(hm_ctscores)]
+    )
+    
+    
+    nicedend <- ggdendro::ggdendrogram(rev(dend), rotate = T) +   
+      scale_y_reverse(expand = c(0.05, 0))+
+      theme(axis.text.y = element_blank(),
+            axis.text.x = element_blank())
+    
+    dp_ctscores <- DotPlot(sobj, assay = 'predictions', rev(ct_ordered)) + 
+      coord_flip() + 
+      theme(axis.title.y=element_blank(),
+            axis.text.y =  element_text(hjust = 0))+
+      scale_color_gradient2(low = 'blue', high = 'red', mid = 'grey')+
+      xlab(label = 'Cluster')+
+      guides(color = guide_colorbar(title = "Scaled Average\nPrediction Score"))
+    
+    dp_ctscores <- patchwork::wrap_plots(list(nicedend, dp_ctscores), widths = c(0.2,1))
+    
+    
+    
+    
+    
+    # heatmap of reference markers
+    m_reference <- readRDS(m_reference_path)
+    m_ref_small <- m_reference[m_reference$gene %in% rownames(sobj),]
+    m_ref_small <- m_ref_small[m_ref_small$cluster %in% ct_in,]
+    n <- 5
+    top <- m_ref_small %>% group_by(cluster) %>% top_n(n = n, wt = avg_log2FC)
+    
+    genes <- top$gene
+    
+    
+    #make sure genes are in 
+    if( any( !(genes %in% rownames(sobj@assays$SCT@scale.data)) ) ){
+      missinggenes <- genes[!(genes %in% rownames(sobj@assays$SCT@scale.data))]
+      sobj <- GetResidual(sobj, genes)
+    }
+    
+    #prep heatmap
+    top <- top[top$gene %in% rownames(sobj),]
+    gem <- sobj@assays$SCT@scale.data
+    gem <- gem[match(top$gene, rownames(gem)),]
+    
+    #annot for clusters
+    #first order gem by cluster...
+    md <- sobj@meta.data
+    md <- md[order(md$seurat_clusters),]
+    gem <- gem[,match(rownames(md), colnames(gem))]
+    
+    clust_bc <- setNames(md$seurat_clusters,
+                         nm = colnames(gem)
+    )
+    
+    col_clust <- setNames(scales::hue_pal()(length(levels(sobj$seurat_clusters))),
+                          nm = levels(sobj$seurat_clusters))
+    
+    ha_clust <- ComplexHeatmap::HeatmapAnnotation(Cluster = clust_bc, 
+                                                  col = list(Cluster = col_clust)
+    )
+    
+    
+    
+    #annot for markers
+    
+    #set genes according to ct_ordered
+    top$cluster <-factor(top$cluster, levels=ct_ordered)
+    top <- top[order(top$cluster),]
+    gem <- gem[match(top$gene, rownames(gem)),]
+    
+    ct_gene <- setNames(top$cluster,
+                        nm=top$gene)
+    coul <- RColorBrewer::brewer.pal(8, "Set2") 
+    coul <- colorRampPalette(coul)(length(unique(top$cluster)))
+    col_gene <- setNames(coul, nm = unique(top$cluster))
+    
+    ha_genes <- ComplexHeatmap::rowAnnotation(Celltype = ct_gene, col = list(Celltype = col_gene),
+                                              show_annotation_name=F)
+    
+    
+    #restrict range
+    gem[gem>5] <- 5
+    gem[gem<-5] <- -5
+    
+    
+    #actual heatmap
+    hm_refmarkers <- ComplexHeatmap::Heatmap(gem,
+                                             #column_title = sampname,
+                                             column_labels = rep('', ncol(gem)),
+                                             row_names_gp = grid::gpar(fontsize = 5),
+                                             column_split = md[,paste0('SCT_snn_res.', res_indi)],
+                                             row_split = top$cluster,
+                                             row_title_gp = grid::gpar(fontsize = 5),
+                                             row_gap = unit(0.8, "mm"), 
+                                             column_gap = unit(0.8, "mm"),
+                                             column_title_rot = 45,
+                                             column_title_gp = grid::gpar(fontsize = 7),
+                                             row_title_rot = 0,
+                                             name = 'Scaled\nExpression',
+                                             cluster_columns = F,
+                                             cluster_rows = F,
+                                             top_annotation = ha_clust,
+                                             left_annotation = ha_genes,
+                                             use_raster = F)
+    
+    
+    # hm_refmarkers <- draw(hm_refmarkers, column_title = sampname)
+    
+    
+    
+    #try to average the matrix
+    avgl <- lapply(levels(md$seurat_clusters), function(clust){
+      mdc <- md[md$seurat_clusters==clust,]
+      gemc <- gem[,colnames(gem) %in% rownames(mdc)]
+      avg <- matrix(rowMeans(gemc), 
+                    dimnames = list(rownames(gem), clust))
+      avg
+    })
+    avg <- do.call('cbind',avgl)
+    
+    #need to re-prep column annot
+    clust_bc <- factor(str_sort(colnames(avg), numeric = T), levels = str_sort(colnames(avg), numeric = T))
+    
+    col_clust <- setNames(scales::hue_pal()(length(levels(sobj$seurat_clusters))),
+                          nm = levels(sobj$seurat_clusters))
+    
+    ha_clust <- ComplexHeatmap::HeatmapAnnotation(Cluster = clust_bc, col = list(Cluster = col_clust))
+    
+    
+    hm_refmarkers_avg <- ComplexHeatmap::Heatmap(avg,
+                                                 #column_title = sampname,
+                                                 row_names_gp = grid::gpar(fontsize = 6),
+                                                 column_split = factor(str_sort(colnames(avg), numeric = T), levels = str_sort(colnames(avg), numeric = T)), 
+                                                 column_title_rot = 45,
+                                                 column_names_rot = 0, 
+                                                 
+                                                 row_split = top$cluster,
+                                                 row_title_gp = grid::gpar(fontsize = 6),
+                                                 row_gap = unit(0.5, "mm"), 
+                                                 column_gap = unit(0.5, "mm"),
+                                                 row_title_rot = 0,
+                                                 name = 'Scaled\nExpression',
+                                                 cluster_columns = F,
+                                                 cluster_rows = F,
+                                                 top_annotation = ha_clust,
+                                                 left_annotation = ha_genes,
+                                                 use_raster = F)
+    
+    
+    # hm_refmarkers_avg <- draw(hm_refmarkers_avg, column_title = sampname)
+    
+    
+    
+    
+    #top cell type plots
+    plottingvar <- 'top_celltype_call_seurat'
+    
+    
+    
+    d2_a <- wrap_plots(
+      DimPlot(sobj, group.by = plottingvar, label = T, repel = T)
+    ) + plot_annotation(title = sampname)
+    
+    d2_b <- wrap_plots(
+      FeaturePlot(sobj, 'top_celltype_call_seurat_score')) + plot_annotation(title = sampname)
+    
+    #alluvial plot, clusters to cell types
+    md <- sobj@meta.data
+    labelsdf <- md[,c('seurat_clusters', 'top_celltype_call_seurat')]
+    
+    
+    ap <- wrap_plots( alluvialplot(labelsdf, repel = T, direction='y')
+    ) + plot_annotation(title = sampname)
+    
+    
+    
+    
+    
+    
+    
+    
+    #using heatmap dendrogram, order in a cool way
+    suppressWarnings(
+      ct_ordered <- rownames(hm_ctscores@matrix)[ComplexHeatmap::row_order(hm_ctscores)]
+    )
+    
+    ct_plots <- ct_plots[ct_ordered] 
+    
+    
+    
+    list(d1_a=d1_a, 
+         hm_ctscores=hm_ctscores,
+         dp_ctscores=dp_ctscores,
+         hm_refmarkers=hm_refmarkers,
+         hm_refmarkers_avg=hm_refmarkers_avg,
+         
+         d2_a=d2_a,
+         d2_b=d2_b,
+         ap=ap,
+         
+         ct_plots=ct_plots
+         )
+    
+    
+  })
+  
+  
+  #name them with the code names
+  
+  names(ctplots_individualsamples) <- sapply(sobjlist, function(sobj){sobj@project.name}, simplify = T)
+  
+  #save as PDFs
+  
+  lapply(names(ctplots_individualsamples), function(sampname){
+    pdf( paste0(outdir_indi, '/individualsample_plots/', sampname, '_celltypepredictions.pdf'), width = 9, height = 9 )
+    
+    print( ctplots_individualsamples[[sampname]] )
+    
+    dev.off()
+    
+  })
+  
+  
+  
+}
+
+```
+
+
+
+
+
+
+```{r summaryplots_individualsamples_print_summary, fig.keep='all', message=FALSE, results='asis'}
+
+
+
+
+
+#print to report
+
+# do this in a way that creates a section for each sample...
+# https://stackoverflow.com/questions/36674824/use-loop-to-generate-section-of-text-in-rmarkdown
+
+template <- "
+
+
+## Sample %s
+
+
+" # don't forget the newline
+
+
+
+
+for (i in 1:length( names(summaryplots_individualsamples) ) ) {
+  sampname <- names(summaryplots_individualsamples)[i]
+  
+  cat(sprintf(template, sampname))
+  
+  
+  sampsumplots <- summaryplots_individualsamples[[i]]
+  
+  
+  
+  #plot each plot one at a time with appropriate label
+  
+  plotlab <- "
+
+
+### UMAP of clusters
+
+Here we plot a UMAP of the Louvain clusters for this sample.
+
+
+"
+  
+  cat( plotlab )
+  print( sampsumplots$d1_a )
+  
+  
+  
+  
+  
+  plotlab <- "
+
+
+### Heatmap of cluster markers
+
+Here we plot the top 5 marker genes of each cluster as identified by wilcoxon test. Please note that some clusters may be made up of spots with few actual cells, and therefore may have few or no clear cluster markers. This can happen if regions of the slide are made up of non-cellular areas like extracellular matrix space.
+
+
+"
+  
+  cat( plotlab )
+  print( sampsumplots$hm )
+  
+  
+  plotlab <- "
+
+
+### QC plots 
+
+Here we plot some QC information, including the number of UMIs (nCount_Spatial) and the number of unique genes (nFeature_Spatial). Very low values may indicate a low number of cells in a specific area or low quality.
+
+
+"
+  
+  cat( plotlab )
+  print( sampsumplots$d0 )
+  
+}
+
+
+
+
+
+```
+
+
+
+
+```{r labeltransfermessage_2, results='asis'}
+
+
+if(use_labeltransfer == T){
+  
+  
+  text <- '
+# Individual sample cell type predictions (pre-integration)
+
+For each sample we perform label transfer from a reference single-cell RNA-seq dataset. Here, we plot the results of the label transfer. Using a single-cell RNAseq dataset, we learn where the cell types are in the spatial data.
+
+Each spot is a mixture of cells. Using label transfer, we can get a score for each cell type in the tissue. If a spot is composed of one cell type, it will have a high score for that cell type only. If a spot is composed of a mix of cell types, it may have a moderately high score for two or more cell types.
+
+
+
+It can be complex and time-consuming to analyze each sample individually before integration; however, the reward is often worth the effort. Characterizing each sample allows us to assess the presence of cell types in each sample carefully. For example, we may find that all the samples contain neuron cells, while only one sample may contain macrophage cells, but other samples do not. This is useful for interpreting the downstream results of differential expression across samples; for example, it would be wise to focus on a comparative analysis of the cell types in all samples (neurons), and simply note that macrophages are present in some but missing in other samples.
+
+Additionally, it is also useful to observe how the cell types are related to one another in the individual samples. We may observe that immune cell types like T cells and B cells may cluster closely together, while very different cell types, such as neurons and endothelial cells, may cluster far apart. Identifying such clustering patterns in individual samples may help identify cases of "over-integration" or other issues.
+'
+  
+  cat(text)
+  
+  
+}
+
+```
+
+
+
+
+```{r summaryplots_individualsamples_print_celltypeplots, fig.keep='all', message=FALSE, results='asis'}
+
+
+
+
+if(use_labeltransfer == T){
+  
+  #print to report
+  
+  # do this in a way that creates a section for each sample...
+  # https://stackoverflow.com/questions/36674824/use-loop-to-generate-section-of-text-in-rmarkdown
+  
+  template_samples <- "
+
+
+## Sample %s
+
+
+"
+  
+  
+  template_plots <- "
+
+
+### %s
+
+
+"
+  
+  template_celltypes <- "
+
+
+#### %s
+
+
+"
+  
+  
+  for (i in 1:length( names(ctplots_individualsamples) ) ) {
+    sampname <- names(ctplots_individualsamples)[i]
+    
+    cat(sprintf(template_samples, sampname))
+    
+    
+    ctplotlist <- ctplots_individualsamples[[i]]
+    
+    #print them, with titles
+    
+    
+    plotlab <- "
+
+
+### Heatmap of label transfer cell type scores
+
+Here we plot the label transfer scores, which are used to predict cell types from the reference single-cell RNAseq dataset. The values are scaled, allowing easy comparison across clusters.
+
+
+"
+    
+    cat( plotlab )
+    print(ctplotlist$hm_ctscores)
+    
+    
+    
+    plotlab <- "
+
+
+### Dotplot of label transfer cell type scores
+
+Here we plot the label transfer scores, which are used to predict cell types from the reference single-cell RNAseq dataset. The values are scaled, allowing easy comparison across clusters. It is very similar to the heatmap above. However, the dotplot also includes information about how many cells express the cell type score. A big dot indicates many cells in that cluster express it at non-zero level. A big gray dot indicates widespread, low score among cells. A big purple dot indicates widespread, high score among cells. A small dot indicates few cells express the score.
+
+
+"
+    
+    cat( plotlab )
+    
+    print(ctplotlist$dp_ctscores)
+    
+    
+    
+    
+    
+    plotlab <- "
+
+
+### Heatmap of reference cell type markers
+
+Here we plot the top 5 markers of cell types as sorted by average log2 fold change, which  are derived from the reference dataset. Since these are the top specific markers of each cell type in the reference, their expression pattern should match clusters with a high label transfer score for each given cell type, for example a cluster with high T cell score should express high T cell markers.
+
+
+
+"
+    
+    cat( plotlab )
+    
+    print(ctplotlist$hm_refmarkers)
+    
+    
+    
+    plotlab <- "
+
+
+### Heatmap of reference cell type markers averaged across clusters
+
+Here we plot the top 5 reference cell type markers by average log2 fold change, this time using the average cluster expression. The markers are derived from the reference dataset. Using averages allows us to easily see which clusters highly or lowly express the reference cell type markers.
+
+
+
+
+"
+    
+    cat( plotlab )
+    
+    print(ctplotlist$hm_refmarkers_avg)
+    
+    
+    plotlab <- "
+
+
+### Summary plots for each cell type
+
+Here we plot a summary panel to analyze the label transfer scores for each cell type in detail. To help identify which cluster strongly matches the cell type, the scores are plotted as Violin Plots. Additionally, the scores are plotted on the spatial slide.
+
+
+"
+    
+    cat( plotlab )
+    
+    for(j in 1:length(ctplotlist$ct_plots) ){
+      
+      ctname <- names(ctplotlist$ct_plots[j])
+      
+      cat(sprintf(template_celltypes, ctname))
+      
+      print( ctplotlist$ct_plots[[j]] )
+      
+    }
+    
+    
+    
+    plotlab <- "
+
+
+### Top score for each sample
+
+Below we plot the top scoring celltype for each spot. The plot can help identify spatial patterns of cells relative to one another.
+
+It is key to note that each spot may contain a single cell or a mixture of cells and potentially multiple cell types. In other words, a spot marked as Macrophage may contain some contribution from other cell types, but the highest score came from Macrophage.
+
+
+
+"
+    
+    cat( plotlab )
+    
+    
+    
+    
+    
+    plotlab <- "
+
+
+### UMAP of top scoring celltypes
+
+The top celltype is plotted on the UMAP. 
+
+
+
+"
+    
+    cat( plotlab )
+    
+    print(ctplotlist$d2_a)
+    
+    
+    plotlab <- "
+
+
+### UMAP of label transfer scores
+
+The scores of the cell types are plotted on the UMAP. This shows how confident the prediction is. If the score is low, it may be that the cells present in this dataset are missing from the reference.
+
+
+"
+    
+    cat( plotlab )
+    
+    
+    
+    print(ctplotlist$d2_b)
+    
+    
+    
+    plotlab <- "
+
+
+### Alluvial plot mapping between Louvain clusters to top celltypes
+
+This alluvial plot maps cluster labels to top celltype labels for each spot. This can be useful to identify general trends of celltype score per cluster.
+The top-scoring cell type is plotted, but some spots and clusters may contain a mix of cell types.
+
+
+
+"
+    
+    cat( plotlab )
+    
+    
+    print(ctplotlist$ap)
+    
+    
+    
+    
+    
+    
+  }
+  
+  
+  
+}
+
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# Integration of samples
+
+Here, we combine all of the samples to form a single unified dataset.
+
+“Integration” refers to the process of combining together the data from individual samples. Each sample is processed on its own Visium chip slide area, where it undergoes pre-processing, including reverse transcription of RNA to cDNA. Then, each sample is sequenced. Combining samples across slide areas and even across Visium slides may introduce bias due to technical artifacts associated with processing for that sample, i.e., slightly longer incubation periods, slightly more reads sequenced, etc. To combine samples, we thus apply special batch-correction procedures. The method for doing that here relies on the Seurat Anchor-based integration method, developed initially for single-cell RNA-seq. In this approach, spots that contain very similar transcriptomic patterns from each sample are detected; these may correspond to spots composed of the same cell type. Once these are identified, we can “subtract” the differences between them as technical artifacts.
+
+Ultimately, the goal of integration is to minimize technical noise and maximize shared biological signals, the strongest of which is typically  cell type.
+
+Integration can be contrasted with “concatenation,” which involves simply merging the samples without any batch correction. If there are strong batch effects in the data, this method may result in clusters driven not by cell type but by the sample of origin (i.e., cluster 1 is all cells from sample 1, cluster 2 is all cells from sample 2).
+
+
+
+
+
+```{r integration_riscprep, message=F, results='hide', warning=F}
+
+
+
+
+# before integrating, add a few important columns to each sobj metadata
+# "sample" column
+# "condition" column
+# barcode column
+
+
+#add sample to each sobj
+objnames <- names(sobjlist)
+
+sobjlist <- lapply(names(sobjlist), function(sampname){
+  
+  sobj <- sobjlist[[sampname]]
+  sobj$orig.ident <- sampname
+  sobj$Sample <- sampname
+  sobj
+})
+
+names(sobjlist) <- objnames
+
+
+#add a condition column
+sobjlist <- lapply(names(sobjlist), function(sampname){
+  
+  cond <- pseudobulk_metadata[pseudobulk_metadata$Code == sampname,"Condition"]
+  
+  sobj <- sobjlist[[sampname]]
+  sobj$Condition <- cond
+  sobj
+  
+})
+
+names(sobjlist) <- objnames
+
+
+#add a barcode column
+sobjlist <- lapply(names(sobjlist), function(sampname){
+  
+  
+  sobj <- sobjlist[[sampname]]
+  md <- sobj@meta.data
+  md <- cbind(rownames(md), md)
+  colnames(md)[1] <- 'Barcode'
+  sobj@meta.data <- md
+  sobj
+  
+  
+})
+
+names(sobjlist) <- objnames
+
+
+
+
+
+# clean up env before doing this
+rm(ctplotlist, ctplots_individualsamples, elbowplots, m_reference,
+   cutoffplots, cutoffs, sampsumplots, 
+   elbowplots,
+   mlist_individualsamples_clusters, 
+   qc_spatial_feature, qc_spatial_umi, qc_vln_feature, qc_vln_umi,
+   summaryplots_individualsamples)
+
+
+
+invisible(gc(full = T, reset = F, verbose = F))
+
+
+
+
+#### save each object and get the metadata
+
+#add clusters to each sobjlist object and then save each object
+tmpobjdir <- paste0(outdir_indi, '/.tmp_Seurat_objects/')
+dir.create(tmpobjdir, recursive = T)
+
+mdlist <- lapply(pseudobulk_metadata$Code, function(code){
+  
+  sobj <- sobjlist[[code]]
+  saveRDS(sobj, paste0(tmpobjdir, '/', code, '.rds'))
+  
+  md <- sobj@meta.data
+  
+  return(md)
+  
+})
+
+
+names(mdlist) <- pseudobulk_metadata$Code
+
+
+
+
+
+
+#remove gene list and seurat objects form env and purge
+rm(sobjlist)
+invisible(gc(full = T, reset = F, verbose = F))
+
+
+#read in raw seurat objects, filter using mdlist
+
+matlist <- lapply(pseudobulk_metadata$Code, function(code){
+  
+  #get md for this object
+  md <- mdlist[[code]]
+  
+  #read raw matrix
+  samp <- pseudobulk_metadata[pseudobulk_metadata$Code == code,'Sample']
+  datafp <- paste0(datadir, '/', samp)
+  # if on hpc, use below
+  # datafp <- paste0(datadir, '/', samp, '/outs/')
+  
+  # for the dl data, we need to find the filepath
+  h5_filename <- grep(pattern = 'filtered_feature_bc_matrix.h5',
+                      list.files(datafp, recursive = T, full.names = T),
+                      value = T)
+  
+  #get RNA counts matrix
+  mat0 <- Read10X_h5(h5_filename)
+  
+  #filter using sobj metadata
+  mat0 <- mat0[,match(rownames(md), colnames(mat0))]
+  
+  
+  return(mat0)
+  
+})
+
+names(matlist) <- pseudobulk_metadata$Code
+
+#join matrices, filter genes from joint mat and proceed with union
+bigmat <- do.call(cbind, matlist)
+
+#get num cells expressing
+num_nonzeros <- tabulate(bigmat@i + 1)
+
+#get joint filtered genes as those exp by  >= 3 cells
+joint_filt_genes <- rownames(bigmat)[num_nonzeros >= 3]
+
+
+
+# prep the risc objects #
+risclist <- lapply(pseudobulk_metadata$Code, function(code){
+  
+  #get md and mat0
+  md <- mdlist[[code]]
+  mat0 <- matlist[[code]]
+  
+  #subset matrix using jointly filtered genes
+  mat0 <- mat0[rownames(mat0) %in% joint_filt_genes,]
+  mat0 <- mat0[match(joint_filt_genes, rownames(mat0)),]
+  
+  
+  #prep metadata for risc
+  coldata0 <- md
+  rm(md)
+  
+  #get barcodes, strip numeric suffix, and add samplename prefix
+  barcodes <- stringr::str_split_fixed(rownames(coldata0), '-', 2)[,1]
+  barcodes <- paste0(coldata0$orig.ident, '.',barcodes)
+  
+  coldata0 <- cbind(barcodes, coldata0)
+  rm(barcodes)
+  
+  
+  #make the rowdatadf...
+  rowdata0 = data.frame(Symbol = rownames(mat0), row.names = rownames(mat0))
+  
+  #make the risc object
+  ### make sure to set is.filter = F or it will still use sample-specific filtering
+  dat0 = readsc(mat0, coldata0, rowdata0, is.filter = F)
+  
+  rm(mat0, rowdata0, coldata0)
+  
+  return(dat0)
+})
+
+names(risclist) <- pseudobulk_metadata$Code
+
+
+#clean env
+rm(bigmat, num_nonzeros, joint_filt_genes, matlist, mdlist)
+invisible(gc(full = T, reset = F, verbose = F))
+
+
+
+
+
+
+#### process each sample ####
+# make sure to set ncore to 1 for all; we'll parallelize across samples for this
+
+#prepare the RISC functions
+process0 <- function(obj0){
+  
+  # Filter cells and genes
+  message('scFilter')
+  obj0 = RISC::scFilter(obj0, min.UMI = 0, max.UMI = Inf, min.gene = 0, min.cell = 0, is.filter = F)
+  
+  # Normalize the raw counts
+  message('scNormalize')
+  obj0 = RISC::scNormalize(obj0, ncore = 1)
+  
+  # Find highly variable genes
+  message('scDisperse')
+  obj0 = RISC::scDisperse(obj0)
+  
+  return(obj0)
+}
+
+
+
+
+### process each sample with RISC functions, in parallel
+cl <- parallel::makeCluster(workernum)
+doParallel::registerDoParallel(cl)
+
+risclist <- foreach(dat0 = risclist,
+                    .packages = c('RISC')) %dopar% 
+  {
+    return( process0(dat0) )
+  }
+
+
+parallel::stopCluster(cl)
+invisible(gc(full = T, reset = F, verbose = F))
+names(risclist) <- pseudobulk_metadata$Code
+
+
+
+## variable genes - we still use all genes.
+#get the intersect of gene names
+var0 <- Reduce(intersect, lapply(risclist, FUN = function(x){x@rowdata$Symbol}))
+
+
+
+
+#run inplot - just to show the plot later
+#pdf null prevents premature plot showing
+pdf( NULL )
+
+ip <- InPlot(risclist, var.gene = var0, Std.cut = 0.95, ncore = workernum) 
+ip <- patchwork::wrap_plots(ip)
+
+dev.off()
+
+
+
+### reference- either user-defined, or guess
+
+if( !(is.null(risc_reference)) ){
+  
+  
+  
+  #write some text about which one was selected
+  #cat()
+  
+  
+  #if provided, we need the numeric index of which sample was given
+  
+  #it can be either sample or code name
+  if(is(risc_reference %in% pseudobulk_metadata$Sample)){
+    ref <- grep(risc_reference, pseudobulk_metadata$Sample)
+  }
+  
+  #it can be either sample or code name
+  if(is(risc_reference %in% pseudobulk_metadata$Code)){
+    ref <- grep(risc_reference, pseudobulk_metadata$Code)
+  }
+  
+} else{
+  
+  #if not provided, guess it
+  # inplot is not automated and does not suggest which sample to use.
+  # instead, we use the one with most clusters, given that
+  # all samples were processed otherwise identically (same PCs and resolution)
+  
+  
+  # get num clusters from each sample
+  numclusts <- sapply(risclist, function(dat0){
+    length(unique(dat0@coldata$seurat_clusters))
+  })
+  
+  #average each cluster and get averaged variance?
+  # do NOT use pseudobulk, which adds up
+  pbvar <- sapply(risclist, function(dat0){
+    
+    mat <- dat0@assay$logcount
+    md <- dat0@coldata
+    
+    #pseudobulk
+    pb <- pseudobulk(obj = mat, metadata = md, grouping_colname_in_md = 'seurat_clusters')
+    
+    #average: divide pseudobulk columns by num cells
+    numcells <- table(md$seurat_clusters)
+    pb <- sweep(pb, 2, numcells, FUN = '/')
+    
+    clustervar <- apply(pb, 2, function(x){var(x)})
+    
+    mean(clustervar)
+    
+  })
+  
+  #multiply number of clusts * average of cluster variance
+  refscore <- numclusts * pbvar
+  
+  ref <- which.max(refscore)
+  
+  #write some text about which one was selected
+  #cat()
+  
+  
+}
+
+
+#need to rearrange the list...
+# the reference must be the first list element...
+if(ref != 1){
+  
+  data0 <- list(risclist[[ref]])
+  names(data0) <- names(risclist)[ref]
+  
+  for(i in 1:length(risclist)){
+    if(i != ref){
+      name = names(risclist)[i]
+      data0[[name]] <- risclist[[i]]
+    }
+    
+  }
+  
+} else{
+  data0 <- risclist
+}
+
+rm(risclist)
+invisible(gc(full = T, reset = F, verbose = F))
+
+
+```
+
+
+
+```{r integration_multiint, message=F, results='hide', warning=F}
+
+
+### actual integration ###
+#set "eigens", num PCs to use for integration
+eigens <- pcs_int
+
+#actually integrate
+data0 = scMultiIntegrate(
+  objects = data0, eigens = eigens, add.Id = NULL, var.gene = var0,
+  # method = "RPCI", 
+  align = 'OLS', npc = 50, adjust = TRUE,
+  ncore = workernum, 
+  #do.fast = "AUTO"
+)
+
+
+rm(var0)
+invisible(gc(full = T, reset = F, verbose = F))
+
+
+```
+
+
+
+
+
+
+```{r integration_postproc, message=F, results='hide', warning=F}
+
+
+# integrated UMAP
+data0 = scUMAP(data0, npc = eigens, use = "PLS")
+
+
+# integrated clustering
+# neighbor = 10 is default... maybe make it a variable too...?
+data0 <- scCluster(data0, 
+                   slot = "cell.pls",
+                   method = 'louvain',
+                   npc = eigens, 
+                   neighbor = 10
+)
+
+
+#save it
+outdir_int_objects <- paste0(outdir_int, '/data_objects/')
+dir.create(outdir_int_objects)
+saveRDS(data0, paste0(outdir_int_objects, '/RISC-object_integrated.rds'))
+
+
+
+#cluster markers --> do this with seurat instead
+# riscmarkertime <- proc.time()
+# risc_clustermarkers = AllMarker(data0, ncore = workernum)
+# riscmarkertime <- proc.time() - riscmarkertime
+# takes about an hour, even with parallelization
+
+#get matrix, umap, md, pca, etc; then put into seurat object
+
+mat <- do.call(cbind, data0@assay$logcount)
+md <- data0@coldata
+umap <- data0@DimReduction$cell.umap
+pca <- data0@DimReduction$cell.pls
+
+
+#rename "Cluster" to "RISC cluster"
+risc_clust_lab <- paste0('RISC_Louvain_npc', eigens)
+colnames(md)[ncol(md)] <- risc_clust_lab
+clustname <- risc_clust_lab
+
+#make obj
+sobjint <- CreateSeuratObject(counts = CreateAssayObject(data=mat),
+                              assay = 'RISC', project = 'Integrated',
+                              meta.data = md
+)
+
+#add dim reducs
+sobjint[['umap']] <-  CreateDimReducObject(umap, assay = 'RISC', key = 'UMAP_')
+sobjint[['pca']] <-  CreateDimReducObject(pca, assay = 'RISC', key = 'PCA_')
+
+#clean env
+rm(umap,pca,mat,md, data0)
+invisible(gc(full = T, reset = F, verbose = F))
+
+### find markers ###
+
+#set default levels
+sobjint <- SetIdent(sobjint, value = sobjint@meta.data[,risc_clust_lab])
+sobjint$seurat_clusters <- sobjint@meta.data[,risc_clust_lab]
+
+
+#get markers, parallelized
+# TURN OFF FOR NOW, it seems to break things
+future::plan('multisession', workers=workernum)
+
+#Seurat clusters
+seuratmarkertime <- proc.time()
+m_integrated_clusters <- FindAllMarkers(sobjint, 
+                                        only.pos = T)
+seuratmarkertime <- proc.time() - seuratmarkertime
+
+
+future::plan(strategy = 'sequential')
+
+# takes about an hour, future parallel is not stable and cause memory crash
+
+#save markers
+intmarkersdir <- paste0(outdir_int, '/markergenes_intclusters/')
+dir.create(intmarkersdir, recursive = T)
+intmarkersfile <- paste0(intmarkersdir, '/intmarkers-npc', pcs_int, '.csv')
+write.csv(m_integrated_clusters, intmarkersfile, quote = F, row.names = F)
+
+saveRDS(sobjint, paste0(outdir_int_objects, '/Seurat-object_integrated.rds'))
+
+
+
+```
+
+
+
+
+
+``` {r update_indi_objects, message=F, results='hide', warning=F}
+
+
+
+#remove sobjint for now, so we can read in each seurat object and save them.
+# we'll read back in after
+#add int clusters to each sobj in sobjlist with intmd
+intmd <- sobjint@meta.data
+rm(sobjint)
+invisible(gc(full = T, reset = F, verbose = F))
+
+
+## WE ALSO NEED PREDICTIONS ASSAY FROM INDIVIDUAL OBJECTS
+# only if labeltransfer == T
+
+#add clusters to each sobjlist object and then save each object
+# shoudl already be created above...
+outdir_indi_seuratobjs <- paste0(outdir_indi, '/processed_Seurat_objects/')
+dir.create(outdir_indi_seuratobjs, recursive = T)
+
+predictionmats <- lapply(pseudobulk_metadata$Code, function(code){
+  
+  #read in from temp dir
+  sobj <- readRDS(paste0(tmpobjdir, '/', code, '.rds'))
+  
+  #subset intmd for this sample
+  intmd_sub <- intmd[intmd$Sample == code,]
+  
+  #get md for this sample from sobjlist (pre-int sobj)
+  md <- sobj@meta.data
+  
+  #make sure they match (very likely they always will...?)
+  intmd_sub <- intmd_sub[match(md$Barcode, intmd_sub$scBarcode),]
+  
+  #get clusters; clustname defined above
+  sobj@meta.data[,clustname] <- intmd_sub[,clustname]
+  
+  #save each sample obj to proc obj dir
+  invisible( saveRDS(sobj,
+                     paste0(outdir_indi_seuratobjs, '/SeuratObject-', code, '.rds'))
+  )
+  
+  if(use_labeltransfer == T){
+    #return prediction assay with proper risc barcodes
+    predictionmat <- sobj@assays$predictions@data
+    colnames(predictionmat) <- intmd_sub$Barcode
+    return(predictionmat)
+  } else{
+    return(code)
+  }
+  
+})
+
+
+#remove temp folder
+unlink(tmpobjdir, recursive = T)
+
+
+
+#read sobjint back in
+sobjint <- readRDS( paste0(outdir_int_objects, '/Seurat-object_integrated.rds') )
+
+
+#add predictions assay to integrated seurat object
+if(use_labeltransfer==T){
+  
+  #combine prediction matrices and add to seurat obj
+  predmat <- as(as.matrix(dplyr::bind_cols(predictionmats)), "sparseMatrix")
+  rownames(predmat) <- rownames(predictionmats[[1]])
+  
+  #match order of barcodes
+  predmat <- predmat[,match(rownames(intmd), colnames(predmat))]
+  
+  predassay <- CreateAssayObject(data=predmat)
+  
+  sobjint[['predictions']] <- predassay
+  
+  
+  rm(predmat,predictionmats, predassay)
+  
+}
+
+## clean up env
+rm(predictionmats, intmd)
+
+invisible(gc(full = T, reset = F, verbose = F))
+
+
+
+
+```
+
+
+
+
+
+```{r integration_plots, results='hide', message=FALSE, warning=F}
+
+
+
+
+## for each sample get int clusters for alluvial plot
+mdint <- sobjint@meta.data
+
+
+## plots of the integrated data
+
+#umap of clusters
+clustname <- risc_clust_lab
+d1_int <- DimPlot(sobjint, label = T, repel = T, group.by = clustname)
+
+#umap of samples
+d2_int <- DimPlot(sobjint, group.by = 'Sample', split.by = 'Condition', ncol = 2) + 
+  theme(panel.border = element_rect(colour = "black", fill=NA, size=1.1))
+
+
+#conditions
+dcond <- DimPlot(sobjint, group.by = 'Condition')
+
+#split by conditions
+dcond_split <- DimPlot(sobjint, label = T, repel = T, 
+                       group.by = clustname,
+                       split.by = 'Condition',
+                       ncol=2)+
+  theme(panel.border = element_rect(colour = "black", fill=NA, size=1.1))
+
+#heatmap of cluster markers
+
+DefaultAssay(sobjint) <- 'RISC'
+
+n <- 5
+top <- m_integrated_clusters %>% group_by(cluster) %>% top_n(n = n, wt = avg_log2FC)
+
+genes <- top$gene
+
+#scale the relevant genes
+sobjint <- ScaleData(sobjint, features = genes, verbose = verbose)
+
+
+# #make sure genes are in 
+# if( any( !(genes %in% rownames(sobjint@assays$SCT@scale.data)) ) ){
+#   
+#   #try getresidual...
+#   missinggenes <- genes[!(genes %in% rownames(sobjint@assays$SCT@scale.data))]
+#   sobjint <- GetResidual(sobjint, missinggenes, na.rm = F, replace.value = T)
+#   
+#   #it can be complicated doing this after integration, some genes are NAs... 
+#   scgem <- sobjint@assays$SCT@scale.data
+#   
+#   if( any( !complete.cases(scgem) ) ){
+#     scgem <- scgem[complete.cases(scgem),]
+#     top <- top[top$gene %in% rownames(scgem),]
+#     sobjint@assays$SCT@scale.data <- scgem
+#   }
+#   rm(scgem)
+#   
+# }
+
+
+
+#prep heatmap
+top <- top[top$gene %in% rownames(sobjint),]
+gem <- sobjint@assays$RISC@scale.data
+gem <- gem[match(top$gene, rownames(gem)),]
+
+#annot for clusters
+#first order gem by cluster...
+md <- sobjint@meta.data
+md <- md[order(md$seurat_clusters),]
+gem <- gem[,match(rownames(md), colnames(gem))]
+
+clust_bc <- setNames(md$seurat_clusters,
+                     nm = colnames(gem)
+)
+
+col_clust <- setNames(scales::hue_pal()(length(levels(sobjint$seurat_clusters))),
+                      nm = levels(sobjint$seurat_clusters))
+
+ha_clust <- ComplexHeatmap::HeatmapAnnotation(Cluster = clust_bc, col = list(Cluster = col_clust), show_legend = F)
+
+
+
+#annot for markers
+
+#set genes according to ct_ordered
+top$cluster <-factor(top$cluster, levels=unique(top$cluster))
+# top <- top[order(top$cluster),]
+gem <- gem[match(top$gene, rownames(gem)),]
+
+ct_gene <- setNames(top$cluster,
+                    nm=top$gene)
+
+col_gene <- col_clust
+col_gene <- col_gene[names(col_gene) %in% top$cluster]
+
+ha_genes <- ComplexHeatmap::rowAnnotation(Cluster = ct_gene, col = list(Cluster = col_gene),
+                                          show_annotation_name=F)
+
+
+
+
+#restrict range
+gem[gem>5] <- 5
+gem[gem<-5] <- -5
+
+
+
+#actual heatmap
+hm_int <- ComplexHeatmap::Heatmap(gem,
+                                  # column_title = 'Integrated clusters',
+                                  column_labels = rep('', ncol(gem)),
+                                  row_names_gp = grid::gpar(fontsize = 5),
+                                  column_split = md$seurat_clusters,
+                                  row_split = top$cluster,
+                                  row_title_gp = grid::gpar(fontsize = 5),
+                                  row_gap = unit(0.8, "mm"), 
+                                  column_gap = unit(0.8, "mm"),
+                                  row_title_rot = 0,
+                                  column_title_rot = 45,
+                                  column_title_gp = grid::gpar(fontsize = 7),
+                                  name = 'Scaled\nExpression',
+                                  cluster_columns = F,
+                                  cluster_rows = F,
+                                  top_annotation = ha_clust,
+                                  left_annotation = ha_genes,
+                                  use_raster = F)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# DefaultAssay(sobjint) <- 'integrated'
+
+
+#factorize sample column to make sure it's the right order...
+sobjint$Sample <- factor(sobjint$Sample, levels = pseudobulk_metadata$Code)
+
+#factorize condiiton column to make sure it's the right order...
+sobjint$Condition <- factor(sobjint$Condition, levels = levels(pseudobulk_metadata$Condition))
+
+
+### alluvial plot of condition to cluster
+
+md <- sobjint@meta.data
+
+labelsdf <- md[,c("Condition", clustname)]
+
+ap_cond_to_clust <- alluvialplot(labelsdf)
+
+
+### alluvial plot of sample to cluster
+
+md <- sobjint@meta.data
+
+labelsdf <- md[,c("Sample", clustname)]
+
+
+
+ap_samp_to_clust <- alluvialplot(labelsdf)
+
+
+summaryplots_integrated <- list(dcond=dcond,
+                                d2_int=d2_int,
+                                d1_int=d1_int,
+                                dcond_split=dcond_split,
+                                ap_cond_to_clust=ap_cond_to_clust,
+                                ap_samp_to_clust=ap_samp_to_clust,
+                                hm_int=hm_int)
+
+
+
+
+### save pdfs to a subdir of outdir_int
+outdir_int_plots <- paste0(outdir_int, '/integration_summaryplots/')
+
+dir.create(outdir_int_plots)
+
+pdf( paste0(outdir_int_plots, '/summaryplots_integrated.pdf'), height = 9, width=9 )
+
+print(summaryplots_integrated)
+
+dev.off()
+
+
+
+
+
+
+### cell type plots
+
+if(use_labeltransfer == T){
+  
+  
+  
+  #umap of cell type calls (calculated in individual samples)
+  d3_int <- DimPlot(sobjint, label = T, repel = T, group.by = 'top_celltype_call_seurat')
+  
+  #umap showing top cell type call score (calculated in individual samples)
+  d4_int <- FeaturePlot(SetIdent(sobjint, value = 'top_celltype_call_seurat', ), label = T, repel = T, features = 'top_celltype_call_seurat_score')
+  
+  #### need to plot top cell type on spatial...
+  
+  #heatmap of the prediction scores per cluster
+  # use scaled values, comparable between clusters
+  # get avgs
+  avgs <- AverageExpression(sobjint, assays = 'predictions', return.seurat = F)
+  #remove max
+  avgs <- head( as.data.frame(avgs) , -1)
+  # remove empty prediction rows with all 0s
+  avgs <- avgs[Matrix::rowSums(avgs)>0,]
+  #make column titles nicer
+  colnames(avgs) <- gsub('predictions.', 'cluster_', colnames(avgs))
+  #format as numeric matrix
+  avgs <- as.matrix(avgs)
+  ### scale --> this emphasizes diffs between clusters, seems to put related cell types together
+  avgs <- t(scale(t(avgs)))
+  #select middle value  for color scale
+  medval <- mean(avgs)
+  #plot it
+  hm_ctscores <- ComplexHeatmap::Heatmap(avgs, 
+                                         name = 'Scaled\nmean prediction\nscores per cluster', 
+                                         column_title = 'Integrated', 
+                                         rect_gp = grid::gpar(col = "white", lwd = 0.5), 
+                                         circlize::colorRamp2(c(min(avgs), medval, max(avgs)), c("blue", "white", "red")))
+  
+  
+  
+  #for dotplot, add dendrogram and row label order
+  # it may throw a warning about drawing plot first etc, 
+  #shouldn't be an issue if we set seed, which we did
+  suppressWarnings(
+    dend <- row_dend(hm_ctscores)
+  )
+  
+  #get ordered row labels for dotplot and other plots
+  suppressWarnings(
+    ct_ordered <- rownames(hm_ctscores@matrix)[ComplexHeatmap::row_order(hm_ctscores)]
+  )
+  
+  
+  nicedend <- ggdendro::ggdendrogram(rev(dend), rotate = T) +   
+    scale_y_reverse(expand = c(0.05, 0))+
+    theme(axis.text.y = element_blank(),
+          axis.text.x = element_blank())
+  
+  dp_ctscores <- DotPlot(sobjint, assay = 'predictions', rev(ct_ordered)) + 
+    coord_flip() + 
+    theme(axis.title.y=element_blank(),
+          axis.text.y =  element_text(hjust = 0))+
+    scale_color_gradient2(low = 'blue', high = 'red', mid = 'grey')+
+    xlab(label = 'Cluster')+
+    guides(color = guide_colorbar(title = "Scaled Average\nPrediction Score"))
+  
+  
+  dp_ctscores <- patchwork::wrap_plots(list(nicedend, dp_ctscores), widths = c(0.3,1))
+  
+  
+  
+  
+  
+  
+  # heatmap of reference markers
+  m_reference <- readRDS(m_reference_path)
+  m_ref_small <- m_reference[m_reference$gene %in% rownames(sobjint),]
+  m_ref_small <- m_ref_small[m_ref_small$cluster %in% ct_ordered,]
+  n <- 5
+  top <- m_ref_small %>% group_by(cluster) %>% top_n(n = n, wt = avg_log2FC)
+  
+  genes <- top$gene
+  
+  
+  #scale the relevant genes
+  sobjint <- ScaleData(sobjint, features = genes, verbose = verbose)
+
+  #make sure genes are in 
+  # if( any( !(genes %in% rownames(sobjint@assays$SCT@scale.data)) ) ){
+  #   missinggenes <- genes[!(genes %in% rownames(sobjint@assays$SCT@scale.data))]
+  #   sobjint <- GetResidual(sobjint, genes)
+  # }
+  
+  #prep heatmap
+  top <- top[top$gene %in% rownames(sobjint),]
+  gem <- sobjint@assays$RISC@scale.data
+  gem <- gem[match(top$gene, rownames(gem)),]
+  
+  #annot for clusters
+  #first order gem by cluster...
+  md <- sobjint@meta.data
+  md <- md[order(md$seurat_clusters),]
+  gem <- gem[,match(rownames(md), colnames(gem))]
+  
+  clust_bc <- setNames(md$seurat_clusters,
+                       nm = colnames(gem)
+  )
+  
+  col_clust <- setNames(scales::hue_pal()(length(levels(sobjint$seurat_clusters))),
+                        nm = levels(sobjint$seurat_clusters))
+  
+  ha_clust <- ComplexHeatmap::HeatmapAnnotation(Cluster = clust_bc, col = list(Cluster = col_clust))
+  
+  
+  
+  #annot for markers
+  
+  #set genes according to ct_ordered
+  top$cluster <-factor(top$cluster, levels=ct_ordered)
+  top <- top[order(top$cluster),]
+  gem <- gem[match(top$gene, rownames(gem)),]
+  
+  ct_gene <- setNames(top$cluster,
+                      nm=top$gene)
+  coul <- RColorBrewer::brewer.pal(8, "Set2") 
+  coul <- colorRampPalette(coul)(length(unique(top$cluster)))
+  col_gene <- setNames(coul, nm = unique(top$cluster))
+  
+  ha_genes <- ComplexHeatmap::rowAnnotation(Celltype = ct_gene, col = list(Celltype = col_gene),
+                                            show_annotation_name=F)
+  
+  
+  #restrict range
+  gem[gem>5] <- 5
+  gem[gem<-5] <- -5
+  
+  
+  #actual heatmap
+  hm_refmarkers <- ComplexHeatmap::Heatmap(gem,
+                                           # column_title = 'Integrated clusters',
+                                           column_labels = rep('', ncol(gem)),
+                                           row_names_gp = grid::gpar(fontsize = 5),
+                                           column_split = md$seurat_clusters,
+                                           row_split = top$cluster,
+                                           row_title_gp = grid::gpar(fontsize = 5),
+                                           row_gap = unit(0.8, "mm"), 
+                                           column_gap = unit(0.8, "mm"),
+                                           row_title_rot = 0,
+                                           column_title_rot = 45,
+                                           column_title_gp = grid::gpar(fontsize = 7),
+                                           name = 'Scaled\nExpression',
+                                           cluster_columns = F,
+                                           cluster_rows = F,
+                                           top_annotation = ha_clust,
+                                           left_annotation = ha_genes,
+                                           use_raster = F)
+  
+  
+  
+  
+  #try to average the matrix
+  avgl <- lapply(levels(md$seurat_clusters), function(clust){
+    mdc <- md[md$seurat_clusters==clust,]
+    gemc <- gem[,colnames(gem) %in% rownames(mdc)]
+    avg <- matrix(rowMeans(gemc), 
+                  dimnames = list(rownames(gem), clust))
+    avg
+  })
+  avg <- do.call('cbind',avgl)
+  
+  #need to re-prep column annot
+  clust_bc <- factor(str_sort(colnames(avg), numeric = T), levels = str_sort(colnames(avg), numeric = T))
+  
+  col_clust <- setNames(scales::hue_pal()(length(levels(sobjint$seurat_clusters))),
+                        nm = levels(sobjint$seurat_clusters))
+  
+  ha_clust <- ComplexHeatmap::HeatmapAnnotation(Cluster = clust_bc, col = list(Cluster = col_clust))
+  
+  
+  hm_refmarkers_avg <- ComplexHeatmap::Heatmap(avg,
+                                               column_title = 'Integrated clusters',
+                                               row_names_gp = grid::gpar(fontsize = 6),
+                                               column_split = factor(str_sort(colnames(avg), numeric = T), levels = str_sort(colnames(avg), numeric = T)), 
+                                               column_title_rot = 0,
+                                               column_names_rot = 0, 
+                                               
+                                               row_split = top$cluster,
+                                               row_title_gp = grid::gpar(fontsize = 6),
+                                               row_gap = unit(0.5, "mm"), 
+                                               column_gap = unit(0.5, "mm"),
+                                               row_title_rot = 0,
+                                               name = 'Scaled\nExpression',
+                                               cluster_columns = F,
+                                               cluster_rows = F,
+                                               top_annotation = ha_clust,
+                                               left_annotation = ha_genes,
+                                               use_raster = F)
+  
+  
+  
+  
+  
+  
+  #alluvial plot, int clusters to cell type
+  labelsdf <- mdint[,c('seurat_clusters', 'top_celltype_call_seurat')]
+  ap_int_celltypes <- alluvialplot(labelsdf)
+  
+  
+  #prep spatial dim plots of CT scores
+  # vlnplot of score over cluster
+  # spatialdimplots fo scores over samples
+  # one plot per condition?
+  
+  #get celltypes
+  ct_ordered <- rownames(hm_ctscores@matrix)[ComplexHeatmap::row_order(hm_ctscores)]
+  
+  
+  #split samples by condition
+  
+  DefaultAssay(sobjint) <- 'predictions'
+  
+  
+  #make plots of integrated samples
+  ctplots_int <- lapply(ct_ordered, function(ct){
+    
+    
+    vct <- VlnPlot(sobjint, ct, pt.size = 0.1)
+    
+    
+    list(vct=vct)
+    
+    
+    
+    
+  })
+  
+  names(ctplots_int) <- ct_ordered
+  
+  DefaultAssay(sobjint) <- 'RISC'
+  
+  
+  
+  
+  summaryplots_integrated_ct <- list(
+    
+    hm_ctscores=hm_ctscores,
+    dp_ctscores=dp_ctscores,
+    
+    hm_refmarkers=hm_refmarkers,
+    hm_refmarkers_avg=hm_refmarkers_avg,
+    
+    
+    
+    d3_int=d3_int,
+    d4_int=d4_int,
+    ap_int_celltypes=ap_int_celltypes,
+    
+    ctplots_int=ctplots_int
+    
+  )
+  
+  
+  
+  
+  
+  
+  pdf( paste0(outdir_int_plots, '/summaryplots_integrated_celltypes.pdf'), height = 9, width=9 )
+  
+  print(summaryplots_integrated_ct)
+  
+  dev.off()
+  
+  
+}
+
+
+```
+
+
+
+
+
+## Summary plots of integrated samples
+
+
+```{r summaryplots_int_print_summary, fig.keep='all', message=FALSE, results='asis'}
+
+
+
+
+plotlab <- "
+
+
+### UMAP colored by condition
+
+Here we plot a UMAP of the integrated dataset colored according to the sample’s condition. Overall we expect to observe a good overlap, while some sections may be quite distinct. This can correspond to clusters of cell states or cell types that are present in one cluster but absent from another.
+
+
+"
+
+cat( plotlab )
+
+
+print( summaryplots_integrated$dcond )
+
+
+
+
+
+
+plotlab <- "
+
+
+### UMAP split by condition and colored by sample
+
+Here, the integrated UMAP is split by condition, meaning that cells from Condition A are separated from cells from condition B. Additionally, cells are colored according to their sample origin. This allows us to check the overlap of biological replicates from the same condition.
+
+
+"
+
+cat( plotlab )
+
+
+print( summaryplots_integrated$d2_int )
+
+
+
+
+
+
+plotlab <- "
+
+
+### UMAP colored by integrated clusters
+
+Here we plot the same UMAP as above but this time colored by the integrated clusters. These clusters are important to characterize, as these are the groups that we will compare one-by-one between conditions.
+
+
+"
+
+cat( plotlab )
+
+
+print( summaryplots_integrated$d1_int )
+
+
+
+
+
+
+plotlab <- "
+
+
+### UMAP split by condition and colored by integrated clusters
+
+Here we plot the UMAP split by conditon and colored by integrated clusters. This is useful to see compositional differences in which clusters may be enriched or depleted between conditions.
+
+
+"
+
+cat( plotlab )
+
+
+print( summaryplots_integrated$dcond_split )
+
+
+
+
+plotlab <- "
+
+
+### Alluvial plot mapping condition to integrated clusters
+
+This alluvial plot allows us to see the contribution of each condition to each cluster. This allows us to visualize compositional differences between conditions clearly.
+
+
+"
+
+cat( plotlab )
+
+
+print( summaryplots_integrated$ap_cond_to_clust )
+
+
+
+
+plotlab <- "
+
+
+### Alluvial plot mapping samples to integrated clusters
+
+This alluvial plot allows us to see the contribution of each sample to each cluster. Combined with the condition-focused alluvial plot above, this allows us to verify compositional patterns across biological replicates.
+
+
+"
+
+cat( plotlab )
+
+
+print( summaryplots_integrated$ap_samp_to_clust )
+
+
+
+
+
+plotlab <- "
+
+
+### Heatmap of integrated cluster markers
+
+Here we plot the top 5 markers per cluster for the integrated clusters.
+
+
+"
+
+cat( plotlab )
+
+
+print( summaryplots_integrated$hm_int )
+
+
+
+```
+
+
+
+
+
+```{r labeltransfermessage_3, results='asis'}
+
+if(use_labeltransfer == T){
+  
+  
+  
+  text <- '
+
+# Cell type plots with integrated clusters
+
+Above, we explored the integrated clusters. Here, we review the cell type scores from label transfer. The goal is to understand which cell types make up each cluster.
+
+Each spot is a mixture of cells. Using label transfer, we can get a score for each cell type in the tissue. If a spot is composed of one cell type, it will have a high score for that cell type only. If a spot is composed of a mix of cell types, it may have a moderately high score for two or more cell types.
+
+As mentioned above, each spot may contain a single cell or a mixture of cells and potentially multiple cell types. Thus, assigning a single label to each spot is difficult. Nevertheless, we use the label transfer scores to detect patterns of cell types in each cluster.
+
+'
+  
+  cat(text)
+  
+}
+
+```
+
+
+```{r summaryplots_int_print_celltypes, fig.keep='all', message=FALSE, results='asis'}
+
+
+if(use_labeltransfer == T){
+  
+  
+  
+  
+  plotlab <- "
+
+
+## Heatmap of cell type label transfer scores with integrated clusters
+
+Here we plot the label transfer scores, which are used to predict cell types from the reference single-cell RNAseq dataset. The values are scaled, allowing easy comparison across clusters.
+
+
+"
+  
+  cat( plotlab )
+  
+  print(summaryplots_integrated_ct$hm_ctscores)
+  
+  
+  
+  plotlab <- "
+
+
+## Dotplot of label transfer cell type scores with integrated clusters
+
+Here we plot the label transfer scores, which are used to predict cell types from the reference single-cell RNAseq dataset. The values are scaled, allowing easy comparison across clusters. It is very similar to the heatmap above. However, the dotplot also includes information about how many cells express the cell type score. A big dot indicates many cells in that cluster express it at non-zero level. A big gray dot indicates widespread, low score among cells. A big purple dot indicates widespread, high score among cells. A small dot indicates few cells express the score. 
+
+
+"
+  
+  cat( plotlab )
+  
+  print(summaryplots_integrated_ct$dp_ctscores)
+  
+  
+  
+  
+  
+  
+  plotlab <- "
+
+
+## Heatmap of reference cell type markers in integrated data
+
+Here we plot the top 5 markers of cell types as sorted by average log2 fold change, which  are derived from the reference dataset. Since these are the top specific markers of each cell type in the reference, their expression pattern should match clusters with a high label transfer score for each given cell type, for example a cluster with high T cell score should express high T cell markers.
+
+
+"
+  
+  cat( plotlab )
+  
+  print(summaryplots_integrated_ct$hm_refmarkers)
+  
+  
+  plotlab <- "
+
+
+## Heatmap of reference cell type markers averaged across clusters
+
+Here we plot the top 5 reference cell type markers by average log2 fold change, this time using the average cluster expression. The markers are derived from the reference dataset. Using averages allows us to easily see which clusters highly or lowly express the reference cell type markers.
+
+
+"
+  
+  cat( plotlab )
+  
+  print(summaryplots_integrated_ct$hm_refmarkers_avg)
+  
+  
+  
+  
+  
+
+
+
+  
+  
+  plotlab <- "
+
+
+## UMAP of Top Scoring Celltype
+
+The top scoring celltype is plotted on the UMAP.
+
+
+"
+  
+  cat( plotlab )
+  
+  print(summaryplots_integrated_ct$d3_int)
+  
+  
+    plotlab <- "
+
+
+## UMAP of label transfer prediction score
+
+The label transfer prediction score is plotted on the UMAP. This is a measure of confidence. Low scoring cells may indicate a new cell in the data that was not present in the reference.
+
+
+"
+  
+  cat( plotlab )
+  
+  print(summaryplots_integrated_ct$d4_int)
+  
+  
+  
+  plotlab <- "
+
+
+## Alluvial plot mapping between Louvain clusters to top celltypes
+
+This alluvial plot maps cluster labels to top celltype labels for each spot. This can be useful to identify general trends of celltype score per cluster.
+
+The top-scoring cell type is plotted, but some spots and clusters may contain a mix of cell types. 
+
+
+
+"
+  
+  cat( plotlab )
+  
+  print(summaryplots_integrated_ct$ap_int_celltypes)
+  
+  
+  
+  
+  
+    #CELLTYPE FEATUREPLOTS
+  
+  plotlab <- "
+
+
+## Reference cell types plotted for integrated data for all cell types
+
+Here we plot a summary panel to analyze the label transfer scores for each cell type in detail. To help identify which cluster strongly matches the cell type, the scores are plotted as Violin Plots.
+
+
+"
+  
+  cat( plotlab )
+  
+  
+  template_int_celltypes <- "
+
+
+### %s
+
+
+"
+  
+  invisible(
+    
+    for( i in c(1:length(summaryplots_integrated_ct$ctplots_int)) ){
+      
+      ct = names(summaryplots_integrated_ct$ctplots_int)[i]
+      
+      cat(sprintf(template_int_celltypes, ct))
+      
+      thisct_plots <- summaryplots_integrated_ct$ctplots_int[[i]]
+      
+      print(thisct_plots$vct)
+      
+      # invisible(lapply(thisct_plots$ctplots_conds, print))
+      
+      
+      
+    }
+    
+  )
+  
+  
+}
+
+```
+
+
+
+
+
+
+# Differential expression across conditions
+
+
+Below we summarize the results of cross-condition differential expression (DE) analysis, for example KO vs WT, or disease vs healthy, or drugged vs control. As in single-cell data, we stratify the cross-condition DE by cluster. In other words, using the clusters defined above, we compare KO vs WT in cluster 1, cluster 2, and so on. For these types of analysis, it is recommended to have multiple biological replicates per condition.
+
+If multiple replicates are available, then the best way to take advantage of these is to use a "pseudobulk" strategy. This refers to an approach in which cells from each sample are pooled together, and bulk RNA-seq analysis methods are used to identify DE genes across conditions. Pseudobulk differential expression analysis is done with EdgeR likelihood ratio test, as recommended by [Squair et al 2021 Nat Com.](https://www.nature.com/articles/s41467-021-25960-2)
+
+If replicates are not available, it is still possible to compare conditions. This is done using a wilcoxon test approach. Drawing conclusions from the results of this type of analysis are inherently limited as they constitute "N of 1" experiments, but can be considered as preliminary/pilot data.
+
+
+
+
+
+``` {r de_across_conditions, results='hide', message=FALSE, fig.show='hide', warning=FALSE}
+
+
+
+#prep names
+comps$labels <- paste0(comps$c1, '_vs_', comps$c2)
+
+#read sobjlist back in? keep it in?
+# will need to optimize memory
+
+#get cluster object name
+clustname <- risc_clust_lab
+
+
+#get the actual clusters (grouping levels)
+groupinglevs <- levels(sobjint@meta.data[,clustname])
+
+# for later, if they are clusters, we want better labels than just numerics
+
+groupinglev_nicelabs <- paste0('cluster_', groupinglevs)
+
+
+
+### use pseudobulk if comparisons have 1 vs 1
+
+
+# if not, use wilcox test
+
+if(de.test.use == 'pseudobulk_edgeR'){
+  
+  
+  # how to deal with clusters that are missing from samples?
+  # pseudobulk all even if too few cells
+  # later if all 0 just remove the column from analysis
+  # if this removes too many sampless, make sure we can still run at least 2 v 2 by condition
+  
+  # pblist <- lapply(sobjlist, function(sobj){
+  #   #message(sobj@project.name)
+  #   pseudobulk(sobj, 
+  #              grouping_colname_in_md = clustname, 
+  #              assay = 'Spatial')
+  # })
+  
+  #for sample, pseudobulk by celltype
+  samples <- pseudobulk_metadata$Code
+  
+  pblist <- lapply(samples, function(samp){
+    
+    message('\n\n',samp, '\n')
+    
+    md <- sobjint@meta.data
+    md <- md[md$Sample == samp,]
+    cells <- rownames(md)
+    sobjint_ct <- sobjint[,cells]
+    
+    
+    
+    pb <- pseudobulk(sobjint_ct, 
+                     assay = 'RISC', 
+                     slot = 'data',
+                     grouping_colname_in_md = clustname,
+                     min_cells = 0)
+    
+    
+    ### round it for edgeR
+    # this is esp important for spotclean...
+    pb <- round(pb)
+    
+    pb
+    
+  })
+  
+  
+  names(pblist) <- samples
+  
+  
+  ### make sure cluster is in each sample, by adding fake column if needed...
+  
+  pblist <- lapply(pblist, function(pb){
+    
+    
+    #if any cluster is missing, 
+    # loop thru missing clusters and create columns of 0s
+    if(any(!(groupinglevs %in% colnames(pb)))){
+      fakectcols <- lapply(groupinglevs, function(ct){
+        if(!(ct %in% colnames(pb))){
+          fakectcol <- data.frame(ct = rep(0, nrow(pb)))
+          colnames(fakectcol) <- ct
+          fakectcol
+        }
+      })
+      fakectcolsdf <- dplyr::bind_cols(fakectcols)
+      
+      #add the columns of zeros to the gem
+      pb <- cbind(pb, fakectcolsdf)
+    }
+    
+    
+    
+    #make sure the clusters are ordered properly 
+    # (ie if we ahve 8 clusters and cluster 5 was missing)
+    pb <- pb[,match(groupinglevs,colnames(pb))]
+    
+    pb
+    
+  })
+  
+  
+  # save it as pblist overall, since it gets subsetted in the lapply
+  pblist_overall <- pblist
+  
+  
+  ### loop thru comparisons ###
+  # DE in each comparison
+  # make sure to select clusters shared by the two conditons
+  # for those clusters, use all samples for edgeR, and use c1 vs c2 for contrast functon
+  
+  
+  
+  compslen <- 1:nrow(comps)
+  m_bycluster_crosscondition_de_comps <- lapply(compslen, function(compidx){
+    
+    
+    
+    
+    
+    #get comparison condition levels
+    c1 <- comps[compidx,1]
+    c2 <- comps[compidx,2]
+    
+    
+    #get lab
+    lab <- comps[compidx, 3]
+    
+    message('\n', lab)
+    
+    
+    ## get only this comp samples
+    #subset MD
+    comp_pseudobulk_md <- pseudobulk_metadata[pseudobulk_metadata$Condition %in% c(c1,c2),]
+    
+    #for EDGER, c1 needs to be level 2, c2 needs to be level 1
+    comp_pseudobulk_md$Condition <- factor(comp_pseudobulk_md$Condition, levels = c(c2, c1))
+    
+    #subet pblist for this comp
+    pblist <- pblist_overall
+    pblist <- pblist[ match(comp_pseudobulk_md$Code, names(pblist) )]
+    
+    
+    
+    
+    
+    
+    #### for each int cluster, loop thru and compare condition 1 vs condition 2 ####
+    
+    ## loop thru SHARED clusters ##
+    clusters <- groupinglevs
+    names(clusters) <- clusters
+    
+    
+    m_bycluster_crosscondition_de <- lapply(clusters, function(clust){
+      
+      
+      message(clust)
+      
+      #get the pseudobulks of each cluster
+      
+      gemlist <- lapply( names(pblist) ,  function(samp){
+        
+        # message(samp)
+        pb <- pblist[[samp]]
+        
+        pbcol <- pb[,colnames(pb)==clust, drop=F]
+        colnames(pbcol) <- samp
+        
+        pbcol
+      })
+      
+      #combine the cluster pseudobulks to one gene exp matrix
+      gem <- dplyr::bind_cols(gemlist)
+      
+      
+      #prep for edgeR
+      
+      # remove low exp genes
+      gem <- gem[Matrix::rowSums(gem) > 3,]
+      
+      # remove empty columns (samples with all 0 for this cell type)
+      gem <- gem[,Matrix::colSums(gem) > 10,drop=F]
+      
+      #make sure enough samples from each condition remain... if not need to remove this one...
+      
+      comp_pseudobulk_md <- comp_pseudobulk_md[match(colnames(gem), comp_pseudobulk_md$Code),]
+      
+      #check or skip
+      condtab <- table(comp_pseudobulk_md$Condition)
+      if(condtab[c1] < 2 & condtab[c2] < 2){
+        return()
+      }
+      
+      
+      
+      #counts and "group"
+      eobj <- DGEList(counts = gem, group = comp_pseudobulk_md$Condition)
+      
+      #size factors
+      eobj <- calcNormFactors(eobj)
+      
+      #design, using group variable, factor levels are important
+      design <- model.matrix(~comp_pseudobulk_md$Condition)
+      
+      
+      
+      #dispersion
+      eobj <- estimateDisp(eobj, design)
+      
+      
+      ### run it
+      # coef = 2 is higher factor level, which should be c1
+      fit <- glmFit(eobj,design)
+      lrt <- glmLRT(fit,coef=2)
+      
+      #get res
+      res <- as.data.frame ( topTags(lrt, n = Inf) )
+      
+      #cbind normcounts
+      nc <- cpm(eobj)
+      nc <- nc[match(rownames(res), rownames(nc)),]
+      res <- cbind(res, nc)
+      
+      
+      
+      
+      #attach gene name as a column
+      res <- cbind(rownames(res), res)
+      colnames(res)[1] <- 'gene_symbol'
+      
+      
+      #order by lfc
+      res <- res[order(res$logFC, decreasing = T),]
+      
+      res
+      
+      
+    }) 
+    
+    #name them by cluster
+    # use the nicelabs defined above
+    names( m_bycluster_crosscondition_de ) <- groupinglev_nicelabs
+    
+    
+    #remove empty clusters
+    m_bycluster_crosscondition_de <- m_bycluster_crosscondition_de[lengths(m_bycluster_crosscondition_de) > 0]
+    
+    
+    
+    return(m_bycluster_crosscondition_de)
+    
+  })
+  
+  
+  
+  names(m_bycluster_crosscondition_de_comps) <- comps$labels
+  
+}
+
+
+
+
+
+
+
+if(de.test.use == 'wilcox'){
+  
+  ### loop thru comparisons ###
+  # DE in each comparison
+  # make sure to select clusters shared by the two conditons
+  # for those clusters, use all samples for edgeR, and use c1 vs c2 for contrast functon
+  
+  
+  
+  
+  compslen <- 1:nrow(comps)
+  m_bycluster_crosscondition_de_comps <- lapply(compslen, function(compidx){
+    
+    
+    
+    
+    
+    #get comparison condition levels
+    c1 <- comps[compidx,1]
+    c2 <- comps[compidx,2]
+    
+    
+    #get lab
+    lab <- comps[compidx, 3]
+    
+    message('\n', lab)
+    
+    
+    ## get only this comp samples
+    #subset MD
+    comp_pseudobulk_md <- pseudobulk_metadata[pseudobulk_metadata$Condition %in% c(c1,c2),]
+    
+    #adjust levels, for wilcox c1 = first, c2 = second
+    comp_pseudobulk_md$Condition <- factor(comp_pseudobulk_md$Condition, levels = c(c1, c2))
+    
+    
+    
+    
+    
+    
+    #### for each int cluster, loop thru and compare condition 1 vs condition 2 ####
+    
+    ## loop thru SHARED clusters ##
+    clusters <- groupinglevs
+    names(clusters) <- clusters
+    
+    
+    
+    
+    m_bycluster_crosscondition_de <- lapply(clusters, function(clust){
+      
+      
+      message(clust)
+      
+      
+      #subset for each cluster
+      bigmd <- sobjint@meta.data
+      bigmd <- bigmd[bigmd$Condition %in% c(c1,c2),]
+      clustmd <- bigmd[bigmd[,clustname] == clust,]
+      
+      #check if minimum num cells
+      clustmd$Condition <- factor(clustmd$Condition, levels = c(c1, c2))
+      cellnums <- table(clustmd$Condition)
+      
+      if( (cellnums[c1] < 5 | cellnums[c2] < 5) ){
+        return()
+      }
+      
+      
+      
+      #if all good then subset and run
+      sobjsub <- sobjint[,rownames(clustmd)]
+      
+      #rerun sct adjustment?
+      # sobjsub <- PrepSCTFindMarkers(sobjsub)
+      
+      
+      #do DE
+      
+      #turn off parallelization, this step caused memory leak even on tiny datasets
+      #future::plan('multisession', workers=workernum)
+      
+      res <- FindMarkers(sobjsub, logfc.threshold = 0, min.pct = 0,
+                         ident.1 = c1, ident.2 = c2,
+                         assay = 'RISC',
+                         group.by = 'Condition',
+                         test.use = 'wilcox')
+      
+      # future::plan(strategy = 'sequential')
+      
+      
+      # rm(sobjsub)
+      
+      #reformat table
+      #gene symbol
+      res <- cbind(rownames(res), res)
+      colnames(res)[1] <- 'gene_symbol'
+      rownames(res) <- NULL
+      
+      
+      #add weight...
+      res$weight <- -log10(res$p_val) * sign(res$avg_log2FC) * abs(res$pct.1 - res$pct.2)
+      
+      
+      
+      #order by lfc
+      res <- res[order(res$weight, decreasing = T),]
+      
+      res
+      
+      
+    }) 
+    
+    #name them by cluster
+    # use the nicelabs defined above
+    names( m_bycluster_crosscondition_de ) <- groupinglev_nicelabs
+    
+    
+    #remove empty clusters
+    m_bycluster_crosscondition_de <- m_bycluster_crosscondition_de[lengths(m_bycluster_crosscondition_de) > 0]
+    
+    
+    
+    
+    return(m_bycluster_crosscondition_de)
+    
+  })
+  
+  
+  
+  names(m_bycluster_crosscondition_de_comps) <- comps$labels
+  
+  
+  
+}
+
+
+
+
+
+
+
+## write out the DE results for each comparison, cross condition for each cluster
+
+
+compslen <- 1:nrow(comps)
+
+invisible(
+  lapply(compslen, function(compidx){
+    
+    
+    #get comparison condition levels
+    c1 <- comps[compidx,1]
+    c2 <- comps[compidx,2]
+    
+    #get comp lab
+    lab <- comps[compidx,3]
+    
+    #get cross conditions res per cluster list
+    m_bycluster_crosscondition_de <- m_bycluster_crosscondition_de_comps[[compidx]]
+    
+    
+    
+    de_cross_conditions_dir <- paste0(outdir_int, '/differentialexpression_crosscondition/',c1,'_vs_', c2, '/')
+    
+    dir.create(de_cross_conditions_dir, recursive = T)
+    
+    
+    #for each cluster, write out to scv files
+    invisible(
+      lapply( 1:length(m_bycluster_crosscondition_de), function(i){
+        
+        #get cluster name
+        clustername <- names(m_bycluster_crosscondition_de)[i]
+        
+        #get cluster DE result
+        m <- m_bycluster_crosscondition_de[[i]]
+        
+        #save file
+        de_cross_conditions_file <- paste0(de_cross_conditions_dir, '/', clustername, '.csv')
+        write.csv(m, de_cross_conditions_file, quote = F, row.names = F)
+        
+      })
+    )
+    
+  })
+)
+
+
+
+
+
+#if wilcoxon is used, reformat the dataframe to match edgeR, to ease the pathway analysis
+
+if(de.test.use == 'wilcox'){
+  
+  
+  #for each comparison, loop thru each cluster, and reformat the table
+  
+  m_bycluster_crosscondition_de_comps <- lapply(m_bycluster_crosscondition_de_comps, function(m_bycluster_crosscondition_de){
+    
+    
+    m_bycluster_crosscondition_de <- lapply(m_bycluster_crosscondition_de, function(res){
+      
+      #reformat all
+      res <- res[,c("gene_symbol", "avg_log2FC", "pct.1", "pct.2", "p_val", "p_val_adj")]
+      
+      #rename to match edgeR
+      colnames(res) <- c("gene_symbol", "logFC", "pct.1", "pct.2", "PValue", "qvalue_bonferroni")
+      
+      res$FDR <- p.adjust(res$PValue, method = 'fdr')
+      
+      res
+      
+    })
+    
+  })
+  
+  
+  
+}
+
+
+
+```
+
+
+
+
+
+
+``` {r pathwayanalysis_crosscondition, results='hide', message=FALSE, fig.show='hide', warning=FALSE }
+
+
+
+#at this point, we no longer need many of the high memory using objects
+rm(sobjint, 
+   ap_cond_to_clust, ap_int_celltypes, ap_samp_to_clust, avg, avgl, ctplots_int,
+   cutoffplots, cutoffs,d1_int, d2_int, d3_int,dcond,dcond_split,dend,dp_ctscores,
+   gem,ha_clust,ha_genes,hm_ctscores,hm_int, hm_refmarkers, hm_refmarkers_avg,
+   intmd, labelsdf, m_integrated_clusters,m_ref_small, m_reference, md,mdint,nicedend,
+   sampsumplots, summaryplots_integrated, summaryplots_integrated_ct, thisct_plots, top,
+   spatialdimplots_clusters,
+   d4_int, ip)
+
+invisible(gc(full = T, reset = F, verbose = F))
+
+
+#set font size
+# this is the best size, any bigger there will be overlap...
+cp.font.size <- 5
+
+#prep the pathways
+# make sure to save it. database can update over time
+pwayoutdir <- paste0(outdir_int, '/pathwayanalysis_crosscondition/')
+dir.create(pwayoutdir, recursive = T)
+if( !file.exists( paste0(pwayoutdir, '/msigdb_pathways.rds') ) ){
+  pathways <- msigdbr::msigdbr(species = species)
+  
+  #replace : with _ in actual pathway names:
+  pathways$gs_subcat <- gsub(':', '_', pathways$gs_subcat)
+  
+  saveRDS(pathways, paste0(pwayoutdir, '/msigdb_pathways.rds') )
+  
+} else{
+  pathways <- readRDS(paste0(pwayoutdir, '/msigdb_pathways.rds') )
+}
+
+
+
+
+
+### try to replace ':' with "_"
+# in pwaycats, user provided subcategories:
+pwaycats <- gsub(':', '_', pwaycats)
+names(pwaycats) <- pwaycats
+
+#in actual pathway names:
+pathways$gs_subcat <- gsub(':', '_', pathways$gs_subcat)
+
+#also get hallmarks...
+pathways[pathways$gs_cat == 'H', 'gs_subcat'] <- "HALLMARK"
+
+#prep pathways using categories defined by user
+pathways <- as.data.frame( pathways[pathways$gs_subcat %in% pwaycats,] )
+
+#fgsea recommends no pathways over 500 genes
+pathways <- pathways[table(pathways$gs_name) <= 500,]
+
+
+
+
+invisible(gc(full = T, reset = F, verbose = F))
+
+
+
+### pathway analysis for each condition comparison
+
+# for each condition comparison,
+# for each cluster
+# do pathway analysis and make plot
+
+
+
+compslen <- 1:nrow(comps)
+compidx = 1 #for testing
+
+pathway_analysis_mainlist_comps <- lapply(compslen, function(compidx){
+  
+  
+  #get comparison condition levels
+  c1 <- comps[compidx,1]
+  c2 <- comps[compidx,2]
+  
+  #get comp lab
+  lab <- comps[compidx,3]
+  
+  message(lab)
+  
+  #get cross conditions res per cluster list
+  m_bycluster_crosscondition_de <- m_bycluster_crosscondition_de_comps[[compidx]]
+  
+  
+  
+  #prep NUMDEGS object using THRESHOLD OBJECTS
+  numdegs <- sapply(m_bycluster_crosscondition_de, function(m){ 
+    m <- m[m$FDR < crossconditionDE_padj_thres,, drop=F]
+    m <- m[abs(m$logFC) > crossconditionDE_lfc_thres,, drop=F]
+    try( table( factor(sign(m$logFC), levels=c(-1,1)) ) )
+  })
+  
+  numdegs <- t(numdegs)
+  colnames(numdegs) <- c(c2, c1)
+  
+  
+  
+  pwayoutdir <- paste0(outdir_int, '/pathwayanalysis_crosscondition/',c1,'_vs_', c2, '/')
+  dir.create(pwayoutdir, recursive = T)
+  
+  
+  
+  write.csv(numdegs, paste0(outdir_int, '/differentialexpression_crosscondition/',c1,'_vs_', c2, '_numDEGs_summary.csv'), quote = F, row.names = T)
+  
+  
+  ### loop thru pathway categories
+  names(pwaycats) <- pwaycats
+  
+  
+  #get clust / grouping names
+  clusters <- names(m_bycluster_crosscondition_de)
+  
+  
+  
+  
+  #set gene universe
+  
+  pathway_analysis_mainlist <- lapply(pwaycats, function(pwaycat){
+    
+    message('\n\n', pwaycat, '\n\n')
+    
+    
+    #get pways and genes in this category
+    term2gene <- pathways[pathways$gs_subcat == pwaycat,c('gs_name', 'gene_symbol')]
+    
+    
+    #pways as list for gsea
+    pwayl = split(term2gene$gene_symbol, term2gene$gs_name)
+    rm(term2gene)
+    
+    
+    #get list of pathways upreg in each cluster
+    
+    cl <- parallel::makeCluster(workernum)
+    doParallel::registerDoParallel(cl)
+    
+    
+    
+    #pwayres_DE_across_conditions_per_cluster <- lapply(clusters, function(clust){ 
+    pwayres_DE_across_conditions_per_cluster <- foreach(clust = clusters, 
+                                                        .packages = c('fgsea', 'ggplot2'), 
+                                                        .export = c('pwayl', 'm_bycluster_crosscondition_de', 'pathway_padj_thres', 'cp.font.size'),
+                                                        .noexport = c('pathways'),
+                                                        .verbose = F) %dopar% 
+      { 
+        
+        
+        
+        invisible(gc(full = T, reset = F, verbose = F))
+        
+        
+        #get all DEGs
+        res <- m_bycluster_crosscondition_de[[clust]]
+        
+        
+        
+        #prep weighted list
+        res <- res[,c('gene_symbol', 'logFC', 'PValue')]
+        res$weight <- -log10(res$PValue) * sign(res$logFC)
+        res <- res[order(res$weight, decreasing = T),]
+        
+        #input for gsea is weight named by gene
+        gl <- res$weight; names(gl) <- res$gene_symbol
+        
+        #clean env
+        rm(res)
+        
+        ## run GSEA ##
+        # first run multilevel, then try npermsimple = 1000
+        gseares <- fgsea::fgsea(pathways=pwayl, stats=gl, nproc = 1)
+        
+        invisible(gc(full = T, reset = F, verbose = F))
+        
+        
+        #sometimes there are NAs due to "severely unbalanced pathways", try to fix
+        if( any(is.na(gseares$NES)) ){
+          rm(gseares)
+          
+          gseares <- fgsea::fgsea(pathways=pwayl, stats=gl, nPermSimple=10000, nproc = 1)
+          
+          invisible(gc(full = T, reset = F, verbose = F))
+          
+        }
+        
+        #clean env
+        rm(gl)
+        
+        
+        #format as data.frame instead of data.table
+        gseares <- as.data.frame(gseares)
+        
+        #ensure no NAs are kept
+        gseares <- gseares[complete.cases(gseares[,1:7]),,drop=F]
+        
+        #order by NES
+        gseares <- gseares[order(gseares$NES, decreasing = T),]
+        
+        #apply cutoff of pathway_padj_thres
+        gseares <- gseares[gseares$padj < pathway_padj_thres, ,drop=F]
+        
+        #select pathways with more than just 1 gene in the list
+        gseares <- gseares[gseares$size > 2,,drop=F]
+        
+        #skip if no significant results
+        if( nrow(gseares)==0){ return() }
+        
+        
+        #prep for plot, leave out leading edge
+        gseares_plot <- gseares[,-8]
+        
+        #if more than 20 ,select just 20
+        gseares_plot <- rbind( head( gseares_plot[gseares_plot$NES>0,,drop=F], 10) , 
+                               tail( gseares_plot[gseares_plot$NES<0,,drop=F], 10) )
+        
+        #make pathway names more readable by using spaces instead of underscores
+        gseares_plot$pathway <- gsub(gseares_plot$pathway, pattern = '_', replacement = ' ')
+        
+        #make pathway names more readable by splitting long ones to multiple lines
+        gseares_plot$pathway <- stringr::str_wrap(gseares_plot$pathway, width = 35)
+        
+        #make sure order is by -log(padj) * NES
+        gseares_plot$weight <- -log(gseares_plot$padj) * sign(gseares_plot$NES)
+        gseares_plot <- gseares_plot[order(gseares_plot$weight, decreasing = T),]
+        gseares_plot$pathway <- factor(gseares_plot$pathway, levels = rev(gseares_plot$pathway)  )
+        
+        
+        #plot it
+        dp <- ggplot(gseares_plot, aes(-log10(padj), pathway, col=NES, size = size))+
+          geom_point()+
+          theme_linedraw()+
+          theme(axis.text=element_text(size=cp.font.size) )+
+          scale_color_gradient2(low = 'steelblue', high = 'red', mid = 'white', midpoint = 0, name = 'Normalized\nEnrichment\nScore')+
+          scale_size(range=c(2,6))
+        
+        
+        
+        #return the result table and the plot
+        return(list(gseares = gseares, dp = dp))
+        
+        
+        
+        
+      } #per-cluster loop for this pathway category loop end
+    
+    parallel::stopCluster(cl)
+    
+    
+    names(pwayres_DE_across_conditions_per_cluster) <- clusters
+    
+    
+    return(pwayres_DE_across_conditions_per_cluster)
+    
+  }) #per-pathway category loop end
+  
+  
+  
+  
+  ### remove all NULLS (clusters with no pathways)
+  
+  # remove null categories, ie entire category had no significant pathways
+  
+  #recursively set all missing to 0
+  pathway_analysis_mainlist = lapply(pathway_analysis_mainlist, function(pwayres_cats){
+    
+    pwayres_cats <- lapply(pwayres_cats, function(pwayres_clusts){
+      pwayres_clusts[lengths(pwayres_clusts) > 0]
+    })
+    
+    pwayres_cats[lengths(pwayres_cats) > 0]
+    
+    
+  })
+  
+  #remove any missing categories
+  pathway_analysis_mainlist <- pathway_analysis_mainlist[lengths(pathway_analysis_mainlist)>0]
+  
+  
+  invisible(gc(full = T, reset = F, verbose = F))
+  
+  
+  #save pway analysis for this comparison
+  
+  # loop over this new pwayruns, since some categories theoretically don't have any enriched though unlikely
+  pwayruns <- names(pathway_analysis_mainlist)
+  
+  
+  #for each category, get clster res in that cateogry, 
+  # for each cluster, save the up/down csv and plots
+  invisible(
+    finalpwayouts <- lapply(pwayruns, function(pwaycat){
+      
+      
+      
+      # message(pwaycat)
+      
+      
+      subcatout <- paste0(pwayoutdir, '/', pwaycat, '/')
+      
+      # dir.create(subcatout) --> do this with recursive later, maybe prevent even making it if all don't work
+      
+      clustres <- pathway_analysis_mainlist[[pwaycat]]
+      
+      clusters <- names(clustres)
+      
+      
+      #for each cluster, get up/down csv, up/dwon plot, and save
+      numpways <- lapply(clusters, function(clust){
+        
+        
+        
+        
+        pwayres_DE_across_conditions_per_cluster <- clustres[[clust]]
+        
+        
+        
+        if(is.null(pwayres_DE_across_conditions_per_cluster)){return()}
+        
+        gseares <- pwayres_DE_across_conditions_per_cluster$gseares
+        dp <- pwayres_DE_across_conditions_per_cluster$dp
+        
+        #save PDFs and CSVs
+        
+        subcatout_clustdir <- paste0(subcatout, '/', clust, '/')
+        
+        dir.create(subcatout_clustdir, recursive = T)
+        
+        
+        #upcsv
+        subcatout_clustdir_gseares <- paste0(subcatout_clustdir, '/pathwaytable.csv')
+        
+        #gseares, leading edge needs to be adjusted...
+        gseares$leadingEdge <- sapply(gseares$leadingEdge, function(x){ paste(x, collapse = '/') })
+        
+        write.csv(gseares, subcatout_clustdir_gseares, quote = F, row.names = F)
+        
+        
+        subcatout_clustdir_dp <- paste0(subcatout_clustdir, '/dotplot_toppathways.pdf')
+        
+        pdf(subcatout_clustdir_dp)
+        print( dp )
+        dev.off()
+        
+        
+        
+        nrow(gseares)
+        
+        
+        
+        
+        
+        
+        
+      } ) # close clusters lapply
+      
+      
+    }) # close saving loop for all categories
+    
+  ) # close invisible wrap around lapply
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  ### close any open devices
+  if( !is.null(dev.list()) ){
+    for (i in dev.list()[1]:dev.list()[length(dev.list())]) {
+      dev.off()
+    }
+  }
+  
+  
+  
+  
+  return(pathway_analysis_mainlist)
+  
+  
+}) # close cross condition lapply
+
+
+names(pathway_analysis_mainlist_comps) <- comps$labels
+
+
+
+
+#remove big objects
+rm(pathways)
+invisible(gc(full = T, reset = F, verbose = F))
+
+
+
+
+### prep summary plots for each category
+
+compslen <- 1:nrow(comps)
+pathwaysummplots_comps <- lapply(compslen, function(compidx){
+  
+  #get pway analysis
+  pathway_analysis_mainlist <- pathway_analysis_mainlist_comps[[compidx]]
+  
+  #get comparison condition levels
+  c1 <- comps[compidx,1]
+  c2 <- comps[compidx,2]
+  
+  #get comp lab
+  lab <- comps[compidx,3]
+  
+  
+  ### extract the table from all categories
+  
+  cat_cpres_list <- lapply(pathway_analysis_mainlist, function(pwaycatlist){
+    
+    #in each cluster:
+    # get the tables from each up/dn
+    
+    # use cluster index, we need the cluster name
+    
+    clust_cpres <- lapply(1:length(pwaycatlist), function(clustidx){
+      
+      clustname <- names(pwaycatlist)[clustidx]
+      pwayres_DE_across_conditions_per_cluster <- pwaycatlist[[clustidx]]
+      
+      #use the dotplot data for the table
+      gseares_plot <- pwayres_DE_across_conditions_per_cluster$dp$data
+      
+      gseares_plot$cluster = clustname
+      gseares_plot$condition = c1
+      gseares_plot[sign(gseares_plot$NES) == -1, "condition"] = c2
+      
+      return(gseares_plot)
+      
+      
+    })
+    
+    dplyr::bind_rows(clust_cpres)
+    
+  })
+  
+  
+  #loop thru each category's result data.frame, splitting c1 and c2, and plotting
+  
+  summplots_cats <- lapply( 1:length(cat_cpres_list) , function(catdex){
+    
+    cpres_cat <- cat_cpres_list[[catdex]]
+    catname <- names(cat_cpres_list)[catdex]
+    
+    
+    #make plots for c1 and c2 direction
+    # some categories have no pathways significant for condition, just return null
+    
+    summplots_conds <- lapply( c(c1,c2) , function(cond){
+      
+      #get result tbale for this condition
+      cpres_cat_cond <- cpres_cat[cpres_cat$condition == cond,,drop=F]
+      
+      #if no conditions, it will haev nrow=0 so just return null
+      if(nrow(cpres_cat_cond) == 0){ return() }
+      
+      # subselect categories if more than 30 total, use just top 5 per pathway
+      if(nrow(cpres_cat_cond) > 30){ 
+        #select the ones to pick
+        cpres_cat_cond_sub <- cpres_cat_cond %>% 
+          group_by(cluster) %>% 
+          top_n(n=5, wt = -log10(padj)) %>% 
+          top_n(n=5, wt = abs(NES)) %>% 
+          as.data.frame()
+        
+        #get them, doing it this way allows viewing shared pathways
+        cpres_cat_cond <- cpres_cat_cond[cpres_cat_cond$pathway %in% cpres_cat_cond_sub$pathway,]
+        
+      }
+      
+      
+      #make sure orders are proper
+      # for clusters:
+      cpres_cat_cond$cluster <- factor(cpres_cat_cond$cluster, levels = unique(cpres_cat_cond$cluster))
+      
+      
+      #for pathways
+      cpres_cat_cond$pathway <- factor(cpres_cat_cond$pathway, levels = rev(unique(cpres_cat_cond$pathway)))
+      
+      
+      ggplot(cpres_cat_cond, aes(x=cluster, y=pathway ,size = -log10(padj), col = NES))+
+        geom_point()+
+        theme_linedraw()+
+        theme(axis.text=element_text(size=cp.font.size), 
+              axis.text.x = element_text(angle = 45, vjust = 1, hjust=1) )+
+        scale_color_gradient2(low = 'steelblue', high = 'red', mid = 'white', midpoint = 0, name = 'Normalized\nEnrichment\nScore')+
+        scale_size(range=c(2,6), name = '-log10(padj)')+
+        xlab('Cluster')+ylab('')+
+        ggtitle(catname, subtitle = cond)
+      
+      
+    }) # close cross-condition loop for summary plots
+    
+    names(summplots_conds) <- c(c1,c2)
+    
+    summplots_conds
+    
+    
+  })
+  
+  
+  names(summplots_cats) <- names(cat_cpres_list)
+  
+  
+  
+  #print them to pdfs...
+  
+  pwayoutdir <- paste0(outdir_int, '/pathwayanalysis_crosscondition/',c1,'_vs_', c2, '/')
+  
+  
+  summarypdf <- paste0(pwayoutdir, '/SummaryDotPlots.pdf')
+  pdf(summarypdf, width = 7, height = 7)
+  
+  print(summplots_cats)
+  dev.off()
+  
+  return(summplots_cats)
+  
+  
+  
+}) # close summary plot across conditons loop
+
+
+names(pathwaysummplots_comps) <- comps$labels
+
+
+
+
+### for easily reproducing plots and etc, save them as R objects...
+### saving this becomes absolutely massive...
+DE_pathways_plot_objects_list <- list(comps = comps,
+                                      m_bycluster_crosscondition_de_comps = m_bycluster_crosscondition_de_comps,
+                                      pathway_analysis_mainlist_comps = pathway_analysis_mainlist_comps,
+                                      pathwaysummplots_comps = pathwaysummplots_comps,
+                                      crossconditionDE_padj_thres = crossconditionDE_padj_thres,
+                                      crossconditionDE_lfc_thres = crossconditionDE_lfc_thres)
+
+
+#save object sizes...
+# pwayobjsizedf <- data.frame(obj = names(DE_pathways_plot_objects_list))
+# pwayobjsizedf$size_bytes <- sapply(DE_pathways_plot_objects_list, object.size, simplify = T)
+# 
+# 
+# pwayoutdir <- paste0(outdir_int, '/pathwayanalysis_crosscondition/')
+# 
+# objsizefile <- paste0(pwayoutdir, '/OBJSIZES_DE_pathways_plot_objects_list.csv')
+# 
+# write.csv(pwayobjsizedf, objsizefile, quote = F, row.names = F)
+
+
+DE_pathways_plot_objects_list_file <- paste0(pwayoutdir, '/DE_pathways_plot_objects_list.rds')
+
+saveRDS(DE_pathways_plot_objects_list, DE_pathways_plot_objects_list_file)
+
+
+
+```
+
+
+
+```{r print_pwayanalysis_to_html,  fig.keep='all', message=FALSE, results='asis', fig.width = 7, fig.height = 9}
+
+
+
+
+#### print out NUMDEGS, NUMDEGS THRESHOLDED, AND PWAY ANALYSIS TO HTML
+
+
+#do this for each comparison
+
+
+compslen <- nrow(comps)
+
+for(compidx in c(1:compslen) ){
+  
+  
+  #get comparison condition levels
+  c1 <- comps[compidx,1]
+  c2 <- comps[compidx,2]
+  
+  #get comp lab
+  lab <- comps[compidx,3]
+  
+  #get cross conditions res per cluster list
+  m_bycluster_crosscondition_de <- m_bycluster_crosscondition_de_comps[[compidx]]
+  
+  #get pway results full list
+  pathway_analysis_mainlist <- pathway_analysis_mainlist_comps[[compidx]]
+  
+  #get pway summary plots
+  summplots_cats <- pathwaysummplots_comps[[compidx]]
+  
+  
+  
+  
+  complab <- "
+
+
+## %s
+
+
+"
+  
+  cat(sprintf(complab, lab))
+  
+  
+  
+  
+  
+  
+  plotlab <- "
+
+
+### Number of significant DEGs across conditions in each cluster
+
+Here we check number of differentially expressed genes (DEGs) after applying some statistical thresholds:
+    
+* Adjusted P value < %s
+
+* Fold Change > +/- %s
+
+
+"
+  
+  cat( sprintf(plotlab, crossconditionDE_padj_thres, crossconditionDE_lfc_thres) )
+  
+  
+  numdegs <- sapply(m_bycluster_crosscondition_de, function(m){ 
+    m <- m[m$FDR < crossconditionDE_padj_thres,, drop=F]
+    m <- m[abs(m$logFC) > crossconditionDE_lfc_thres,, drop=F]
+    try( table( factor(sign(m$logFC), levels=c(-1,1)) ) )
+  })
+  
+  numdegs <- t(numdegs)
+  colnames(numdegs) <- c(c2, c1)
+  
+  print(knitr::kable(numdegs))
+  
+  
+  
+  
+  
+  
+  
+  pwayDElab <- "
+
+
+### Gene set enrichment analysis across conditions
+
+Pathway analysis for the cross-condition analysis is performed for overexpressed and underexpressed genes for each cluster. This is done via Gene Set Enrichment Analysis (GSEA) [(Subramanian et al 2005)](https://www.pnas.org/doi/10.1073/pnas.0506580102).
+
+GSEA is preferred over other pathway analysis such as fisher tests or chi-square tests because it does not require making arbitrary cutoffs to the number of DEGs and takes into account how strongly differentially expressed each gene may be. For the latter, data-driven gene-specific weight is applied. We use a standard weighting method of -log10(P-value) * sign of Log Fold Change.
+
+The pathways we choose in pathway analysis are derived from the Molecular Signatures Database (MSIGDB) where they are sorted by categories, such as Gene Ontology (GO) Biological Process, GO Molecular Function, KEGG, Reactome, etc. These are databases that annotate genes by function or molecular pathway.
+
+
+"
+  
+  cat(pwayDElab)
+  
+  
+  
+  
+  
+  
+  # print the pathway analysis
+  
+  
+  pathway_analysis_main_nonull <- pathway_analysis_mainlist[lengths(pathway_analysis_mainlist) != 0]
+  
+  
+  #loop through each category:
+  # loop thru each cluster
+  # get up/down pathways if there are any in each cluster
+  # make some adjustments to the table to adjust for printing: shorten gene list
+  # print for whole category:
+  # 1. summary of whole category, up pathways 
+  # 2. summary of whole category, dn pathways
+  # 3. cluster by cluster, up tables, up dotplots
+  # 4. cluster by cluster, dn tables, dn dotplots
+  
+  for(i in 1:length(pathway_analysis_main_nonull) ){
+    
+    #get category name
+    cat <- names(pathway_analysis_main_nonull)[i]
+    
+    
+    #get actual cluster results, and remove NAs...
+    pwaycat <- pathway_analysis_main_nonull[[i]]
+    
+    
+    # remove clusters with no pathways --> this sets them to list of lengths 0
+    pwaycat = lapply(pwaycat, function(clust){clust[lengths(clust) != 0]})
+    
+    # remove the clusters with no pathways by removing the lists of length 0
+    pwaycat <- pwaycat[lengths(pwaycat) != 0]
+    
+    
+    ### if the category has NO PATHWAYS SIGNIFICANT in ANY cluster, just skip it
+    if(length(pwaycat) == 0){
+      next
+    }
+    
+    
+    
+    #in each category, loop thru each cluster
+    
+    #loop through each cluster's results; this list contains up/down for each pathway
+    # j is the cluster index
+    #for(j in 1:length(pwaycat) ){
+    clustlist <- lapply( c( 1:length(pwaycat) ), function(j){
+      
+      
+      #get cluster name
+      clust <- names(pwaycat)[j]
+      
+      
+      
+      #get this clusters up/down list, and remove if null
+      clustcat <- pwaycat[[j]]
+      clustcat <- clustcat[lengths(clustcat) != 0]
+      
+      if(length(clustcat)==0){
+        return()
+      }
+      
+      
+      
+      #get the results for this cluster
+      dirreslist <- clustcat
+      
+      #get the plot
+      dp <- dirreslist$dp
+      
+      #get the table
+      gseares <- dirreslist$gseares
+      
+      
+      
+      
+      
+      # use the dotplot data to subset only significant
+      gseares_fromplot <- dp$data
+      
+      #fix up so we can match the two
+      gseares_fromplot$Description <- gseares_fromplot$pathway
+      gseares_fromplot$Description <- gsub(' ', replacement = '_', gseares_fromplot$Description)
+      gseares_fromplot$Description <- gsub('\n', replacement = '_', gseares_fromplot$Description)
+      
+      gseares <- gseares[match(gseares_fromplot$Description, gseares$pathway),]
+      
+      
+      #modify cpres... keep only important columns...
+      cpshow <- gseares
+      rownames(cpshow) <- NULL
+      
+      cpshow <- cpshow[,c('pathway', "NES", "ES", "pval", "padj", "log2err", "size", "leadingEdge")]
+      
+      #keep only top 5 leading edge genes
+      top5gene <- sapply(cpshow$leadingEdge, function(x){
+        x <- x[x!='']
+        
+        if(length(x) > 5){
+          x <- head(x,5)
+          x[6] <- '...'
+        }
+        
+        paste(x, collapse = '/')
+      })
+      
+      
+      cpshow$leadingEdge <- top5gene
+      
+      
+      #instead of printing, output a list of them
+      
+      return(
+        list(cpshow=cpshow,
+             dp=dp)
+      )
+      
+      
+      ## return just the cpshow
+      #return(cpshow)
+      
+      
+      
+      
+    }) #close cluster lapply
+    
+    
+    names(clustlist) <- names(pwaycat)
+    
+    
+    
+    #get the summaryplots
+    # i is the category index
+    summplots_conds <- summplots_cats[[i]]
+    
+    
+    
+    
+    
+    
+    
+    # print for whole category:
+    # 1. summary dotplot of whole category, up pathways 
+    # 2. summary dotplot of whole category, dn pathways
+    # 3. cluster by cluster, up/dn table and dotplots
+    
+    #print category label
+    catlab <- "
+
+
+#### %s
+
+
+"
+    
+    #prep cluster label, will print this for each cluster
+    cat(sprintf(catlab, cat))
+    
+    
+    
+    
+    
+    for(condidx in 1:length(c(c1,c2)) ){
+      
+      cond <- c(c1,c2)[condidx]
+      
+      
+      summplot <- summplots_conds[[condidx]]
+      
+      
+      
+      
+      if( is.null(summplot) ){
+        
+        summlab <- "
+
+
+##### Summary %s, no pathways enriched
+    
+This category of pathways had no signifcantly enriched pathways in %s
+
+
+"
+        
+        cat(sprintf(summlab, cond, cond))
+        
+        next
+        
+      }
+      
+      
+      
+      summlab <- "
+
+
+##### Summaryplot: %s
+    
+Here we plot a summary of the gene sets/pathways that are enriched in genes overexpressed in %s. If there are more than 30 significant pathways total, we plot the top 5 per cluster with the lowest adjusted P value.
+
+
+"
+      
+      cat(sprintf(summlab, cond, cond))
+      
+      print(summplot)
+      
+      
+      
+      
+      
+    }
+    
+    
+    
+    
+    
+    
+    clustlab <- "
+
+
+##### Per-cluster pathway results
+      
+Here we plot the pathways that are significantly enriched in the differentially expressed genes between %s and %s for each cluster.
+
+For each condition, we display a table of the GSEA results. NES refers to Normalized Enrichment Score, the main effect size for GSEA. Positive NES indicates the pathway is enriched in %s relative to %s, and vice-versa.
+
+If a cluster is missing, it indicates no pathways were significantly differentially expressed.
+
+
+
+"
+    
+    cat(sprintf(clustlab, c1, c2, c1, c2))
+    
+    
+    #for each cluster, print out the dotplot and table,
+    # or a print a message saying none significant
+    for(clust in names(clustlist) ){
+      
+      
+      
+      
+      
+      clust_cond_lab <- "
+
+
+
+
+
+###### %s
+
+
+"
+      
+      cat(sprintf(clust_cond_lab, clust))
+      
+      
+      
+      clust_plot_tab <- clustlist[[clust]]
+      
+      
+      
+      cpshow <- clust_plot_tab$cpshow
+      dp <- clust_plot_tab$dp
+      
+      
+      
+      print( knitr::kable(cpshow) )
+      print(dp)
+      
+      
+      
+      
+      
+    } #close cluster printing loop
+    
+    
+  } # close category by category for loop
+  
+  
+  
+} # close comparisons loop
+
+
+
+
+
+```
+
+
+
+
+
+
+# Run info
+
+## Run time
+
+```{r timeprint, results=T, message=T}
+
+hourspassed <- (proc.time() - timestart)[3]/60/60
+names(hourspassed) <- 'Hours'
+hourspassed
+
+```
+
+
+
+## Memory usage
+
+```{r memprint, results=T, message=T}
+
+rm(list=ls())
+
+finalmem <- gc(verbose = T, full = T)
+
+mb <- sum(finalmem[,ncol(finalmem)])
+gb <- mb / 1000
+gb <- setNames(gb,'Gb used (approximately)')
+
+gb
+
+```
+
+
+
+
+## Session info
+
+```{r sessioninfo, results=T, message=T}
+beepr::beep()
+
+sessionInfo()
+```
+
+
+
+
